@@ -8,7 +8,7 @@ import yfinance as yf
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# NSE F&O Stock List (Aap isme aur tickers add kar sakte hain)
+# NSE F&O Stock List
 FNO_STOCKS = [
     "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS",
     "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "KOTAKBANK.NS", "LT.NS",
@@ -26,7 +26,13 @@ def send_telegram_msg(message):
             "text": message,
             "parse_mode": "Markdown"
         }
-        requests.post(url, json=payload)
+        try:
+            res = requests.post(url, json=payload)
+            res.raise_for_status()
+        except Exception as e:
+            print(f"Telegram error: {e}")
+    else:
+        print("Telegram Token ya Chat ID missing hai!")
 
 def calculate_vix_mix_signals(df):
     """Pine Script ke Vix_Mix logic ke hisab se signals calculate karta hai."""
@@ -55,19 +61,17 @@ def calculate_vix_mix_signals(df):
     
     green_buy_signals = [False] * len(df)
 
-    # Stateful Loop - Pine Script ke logic ke sath match karne ke liye
     for i in range(len(df)):
         c_wvf = wvf.iloc[i]
         c_is_green = is_green_vix.iloc[i]
         c_is_red = is_red_vix.iloc[i]
         c_high = df['High'].iloc[i]
-        c_close = df['Close'].iloc[i]
         p_close = df['Close'].iloc[i-1] if i > 0 else None
+        c_close = df['Close'].iloc[i]
 
         if pd.isna(c_wvf):
             continue
 
-        # Green VIX & Cluster Reset
         if c_is_green:
             if in_cluster and min_red_wvf is not None:
                 box_highs.append(min_red_high)
@@ -77,13 +81,11 @@ def calculate_vix_mix_signals(df):
                 min_red_high = None
             in_cluster = True
 
-        # Red VIX tracking in cluster
         if in_cluster and c_is_red:
             if min_red_wvf is None or c_wvf < min_red_wvf:
                 min_red_wvf = c_wvf
                 min_red_high = c_high
 
-        # Buy Signal Verification
         can_buy = len(box_highs) >= 2
         green_buy = False
 
@@ -119,7 +121,6 @@ def main():
 
             signals = calculate_vix_mix_signals(df)
 
-            # Latest bar check
             if signals[-1]:
                 latest_price = round(float(df['Close'].iloc[-1]), 2)
                 stock_name = ticker.replace('.NS', '')
@@ -127,12 +128,15 @@ def main():
         except Exception as e:
             print(f"Error scanning {ticker}: {e}")
 
+    # Har run par Telegram message jayega
     if alerts:
         msg = "🚀 *VIX_MIX STRATEGY ALERTS*\n\n" + "\n\n---\n\n".join(alerts)
         send_telegram_msg(msg)
-        print("Telegram alert bhej diya gaya!")
+        print("Signal alerts Telegram par bhej diye gaye!")
     else:
-        print("Aaj koi Green Buy signal nahi mila.")
+        confirm_msg = "⚙️ *VIX_MIX SCANNER EXECUTED*\n\nScan successfully poora ho gaya hai! Aaj kisi bhi F&O stock mein *Green Buy* signal nahi mila."
+        send_telegram_msg(confirm_msg)
+        print("Confirmation message Telegram par bhej diya gaya!")
 
 if __name__ == "__main__":
     main()
