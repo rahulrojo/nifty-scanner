@@ -1,163 +1,138 @@
-
 import os
 import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# Telegram Configuration (GitHub Secrets se load hoga)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Complete Nifty F&O Stocks List
+# NSE F&O Stock List (Aap isme aur tickers add kar sakte hain)
 FNO_STOCKS = [
-    "AARTIIND.NS", "ABB.NS", "ABBOTINDIA.NS", "ABCAPITAL.NS", "ABFRL.NS", "ACC.NS", "ADANIENT.NS", "ADANIPORTS.NS",
-    "ALKEM.NS", "AMBUJACEMENT.NS", "APOLLOHOSP.NS", "APOLLOTYRE.NS", "ASHOKLEY.NS", "ASIANPAINT.NS", "ASTRAL.NS", "ATUL.NS",
-    "AUBANK.NS", "AUROPHARMA.NS", "AXISBANK.NS", "BAJAJ-AUTO.NS", "BAJAJFINSV.NS", "BAJFINANCE.NS", "BALKRISIND.NS",
-    "BALRAMCHIN.NS", "BANDHANBNK.NS", "BANKBARODA.NS", "BATAINDIA.NS", "BEL.NS", "BERGEPAINT.NS", "BHARATFORG.NS",
-    "BHARTIARTL.NS", "BHEL.NS", "BIOCON.NS", "BSOFT.NS", "BPCL.NS", "BRITANNIA.NS", "CANBK.NS", "CANFINHOME.NS",
-    "CHAMBLFERT.NS", "CHOLAFIN.NS", "CIPLA.NS", "COALINDIA.NS", "COFORGE.NS", "COLPAL.NS", "CONCOR.NS", "COROMANDEL.NS",
-    "CROMPTON.NS", "CUB.NS", "CUMMINSIND.NS", "DABUR.NS", "DALBHARAT.NS", "DEEPAKNTR.NS", "DIVISLAB.NS", "DIXON.NS",
-    "DLF.NS", "DRREDDY.NS", "EICHERMOT.NS", "ESCORTS.NS", "EXIDEIND.NS", "FEDERALBNK.NS", "GAIL.NS", "GLENMARK.NS",
-    "GMRINFRA.NS", "GNFC.NS", "GODREJCP.NS", "GODREJPROP.NS", "GRANULES.NS", "GRASIM.NS", "GUJGASLTD.NS", "HAL.NS",
-    "HAVELLS.NS", "HCLTECH.NS", "HDFCAMC.NS", "HDFCBANK.NS", "HDFCLIFE.NS", "HEROMOTOCO.NS", "HINDALCO.NS", "HINDCOPPER.NS",
-    "HINDPETRO.NS", "HINDUNILVR.NS", "ICICIBANK.NS", "ICICIGI.NS", "ICICIPRULI.NS", "IDEA.NS", "IDFC.NS", "IDFCFIRSTB.NS",
-    "IEX.NS", "IGL.NS", "INDHOTEL.NS", "INDIACEM.NS", "INDIAMART.NS", "INDIGO.NS", "INDUSINDBK.NS", "INDUSTOWER.NS",
-    "INFY.NS", "IOC.NS", "IPCALAB.NS", "IRCTC.NS", "ITC.NS", "JINDALSTEL.NS", "JKCEMENT.NS", "JSWSTEEL.NS",
-    "JUBLFOOD.NS", "KOTAKBANK.NS", "LALPATHLAB.NS", "LAURUSLABS.NS", "LICHSGFIN.NS", "LT.NS", "LTIM.NS", "LTTS.NS",
-    "LUPIN.NS", "M&M.NS", "M&MFIN.NS", "MANAPPURAM.NS", "MARICO.NS", "MARUTI.NS", "MCDOWELL-N.NS", "MCX.NS",
-    "METROPOLIS.NS", "MFSL.NS", "MGL.NS", "MOTHERSON.NS", "MPHASIS.NS", "MRF.NS", "MUTHOOTFIN.NS", "NATIONALUM.NS",
-    "NAVINFLUOR.NS", "NESTLEIND.NS", "NMDC.NS", "NTPC.NS", "OBEROIRLTY.NS", "OFSS.NS", "ONGC.NS", "PAGEIND.NS",
-    "PERSISTENT.NS", "PETRONET.NS", "PFC.NS", "PIDILITIND.NS", "PIIND.NS", "PNB.NS", "POLYCAB.NS", "POWERGRID.NS",
-    "PVRINOX.NS", "RAMCOCEM.NS", "RBLBANK.NS", "RECLTD.NS", "RELIANCE.NS", "SAIL.NS", "SBICARD.NS", "SBILIFE.NS",
-    "SBIN.NS", "SHREECEM.NS", "SHRIRAMFIN.NS", "SIEMENS.NS", "SRF.NS", "SUNPHARMA.NS", "SUNTV.NS", "SYNGENE.NS",
-    "TATACHEMICAL.NS", "TATACONSUM.NS", "TATAMOTORS.NS", "TATAPOWER.NS", "TATASTEEL.NS", "TCS.NS", "TECHM.NS",
-    "TITAN.NS", "TORNTPHARM.NS", "TRENT.NS", "TVSMOTOR.NS", "UBL.NS", "ULTRACEMCO.NS", "UPL.NS", "VEDL.NS",
-    "VOLTAS.NS", "WIPRO.NS", "ZEEL.NS"
+    "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS",
+    "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "KOTAKBANK.NS", "LT.NS",
+    "AXISBANK.NS", "TATAMOTORS.NS", "TATASTEEL.NS", "MARUTI.NS", "SUNPHARMA.NS",
+    "TITAN.NS", "BAJFINANCE.NS", "HCLTECH.NS", "ASIANPAINT.NS", "NTPC.NS",
+    "ULTRACATE.NS", "POWERGRID.NS", "INDUSINDBK.NS", "M&M.NS", "TATACONSUM.NS"
 ]
 
-def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
-    requests.post(url, json=payload)
+def send_telegram_msg(message):
+    """Telegram par notification bhejta hai."""
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "Markdown"
+        }
+        requests.post(url, json=payload)
 
-def calculate_black_buy_exact(df):
-    pd_val = 22
-    bbl = 20
-    mult = 2.0
-    lb = 50
-    ph = 0.99
-    pl = 1.01
-    max_red_gap = 15
+def calculate_vix_mix_signals(df):
+    """Pine Script ke Vix_Mix logic ke hisab se signals calculate karta hai."""
+    pd_val, bbl, mult, lb, ph, pl = 22, 20, 2.0, 50, 0.99, 1.01
 
-    # Williams Vix Fix Calculations
-    df['highestClose'] = df['Close'].rolling(window=pd_val).max()
-    df['wvf'] = np.where(df['highestClose'] != 0, ((df['highestClose'] - df['Low']) / df['highestClose']) * 100, 0)
-    df['sDev'] = mult * df['wvf'].rolling(window=bbl).std()
-    df['midLine'] = df['wvf'].rolling(window=bbl).mean()
-    df['lowerBand'] = df['midLine'] - df['sDev']
-    df['rangeLow'] = df['wvf'].rolling(window=lb).min() * pl
+    # Williams Vix Fix Calculation
+    highest_close = df['Close'].rolling(pd_val).max()
+    wvf = ((highest_close - df['Low']) / highest_close) * 100
+    mid_line = wvf.rolling(bbl).mean()
+    s_dev = mult * wvf.rolling(bbl).std(ddof=0)
+    
+    upper_band = mid_line + s_dev
+    lower_band = mid_line - s_dev
+    
+    range_high = wvf.rolling(lb).max() * ph
+    range_low = wvf.rolling(lb).min() * pl
 
-    df['isRed'] = (df['wvf'] <= df['lowerBand']) | (df['wvf'] <= df['rangeLow'])
+    is_green_vix = (wvf >= upper_band) | (wvf >= range_high)
+    is_red_vix = (wvf <= lower_band) | (wvf <= range_low)
 
-    cluster_active = False
-    cluster_min_body = None
-    cluster_min_high = None
-    cluster_min_low = None
-    last_red_bar = None
+    box_highs = []
+    min_red_wvf = None
+    min_red_high = None
+    in_cluster = False
+    green_buy_triggered = False
+    
+    green_buy_signals = [False] * len(df)
 
-    active_boxes = []
-
-    watched_level = None
-    watched_start_idx = None
-    watching_black_buy = False
-
-    black_buy_triggered = False
-    signal_price = None
-
+    # Stateful Loop - Pine Script ke logic ke sath match karne ke liye
     for i in range(len(df)):
-        row = df.iloc[i]
-        bar_index = i
-        is_red = row['isRed']
+        c_wvf = wvf.iloc[i]
+        c_is_green = is_green_vix.iloc[i]
+        c_is_red = is_red_vix.iloc[i]
+        c_high = df['High'].iloc[i]
+        c_close = df['Close'].iloc[i]
+        p_close = df['Close'].iloc[i-1] if i > 0 else None
 
-        if is_red:
-            body_size = row['wvf']
-            gap_too_big = cluster_active and (last_red_bar is not None) and ((bar_index - last_red_bar) > max_red_gap)
+        if pd.isna(c_wvf):
+            continue
 
-            if (not cluster_active) or gap_too_big:
-                cluster_active = True
-                cluster_min_body = body_size
-                cluster_min_high = row['High']
-                cluster_min_low = row['Low']
+        # Green VIX & Cluster Reset
+        if c_is_green:
+            if in_cluster and min_red_wvf is not None:
+                box_highs.append(min_red_high)
+                if len(box_highs) > 4:
+                    box_highs.pop(0)
+                min_red_wvf = None
+                min_red_high = None
+            in_cluster = True
 
-                active_boxes.append({
-                    'low': cluster_min_low,
-                    'high': cluster_min_high,
-                    'broken': False
-                })
+        # Red VIX tracking in cluster
+        if in_cluster and c_is_red:
+            if min_red_wvf is None or c_wvf < min_red_wvf:
+                min_red_wvf = c_wvf
+                min_red_high = c_high
 
-                if len(active_boxes) > 4:
-                    active_boxes.pop(0)
-            else:
-                if body_size < cluster_min_body:
-                    cluster_min_body = body_size
-                    cluster_min_high = row['High']
-                    cluster_min_low = row['Low']
+        # Buy Signal Verification
+        can_buy = len(box_highs) >= 2
+        green_buy = False
 
-                    if len(active_boxes) > 0:
-                        active_boxes[-1]['low'] = cluster_min_low
-                        active_boxes[-1]['high'] = cluster_min_high
+        if can_buy:
+            ref_high1 = box_highs[-1]
+            ref_high2 = box_highs[-2]
+            breakout_level = max(ref_high1, ref_high2)
 
-            last_red_bar = bar_index
+            if p_close is not None:
+                crossover = (p_close <= breakout_level) and (c_close > breakout_level)
+                if not green_buy_triggered and crossover:
+                    green_buy = True
 
-        buy1_signal = False
-        entry_box_high = None
+        if green_buy:
+            green_buy_triggered = True
 
-        if len(active_boxes) >= 2:
-            sorted_boxes = sorted(active_boxes, key=lambda x: x['low'])
-            box2 = sorted_boxes[1]
+        green_buy_signals[i] = green_buy
 
-            if not box2['broken'] and row['Close'] > box2['high']:
-                box2['broken'] = True
-                buy1_signal = True
-                entry_box_high = box2['high']
+    return green_buy_signals
 
-        if buy1_signal:
-            watched_level = entry_box_high
-            watched_start_idx = bar_index
-            watching_black_buy = True
+def main():
+    alerts = []
+    print("F&O Stocks scan ho rahe hain...")
 
-        if watching_black_buy:
-            after_buy1 = bar_index > watched_start_idx
-            green_candle = row['Close'] > row['Open']
-            above_level = row['Close'] > watched_level if watched_level is not None else False
-
-            if after_buy1 and green_candle and above_level:
-                if i == len(df) - 1:
-                    black_buy_triggered = True
-                    signal_price = row['Close']
-
-                watching_black_buy = False
-                watched_level = None
-                watched_start_idx = None
-
-    return black_buy_triggered, signal_price
-
-def run_scanner():
-    for symbol in FNO_STOCKS:
+    for ticker in FNO_STOCKS:
         try:
-            df = yf.download(symbol, period="20d", interval="15m", progress=False)
+            df = yf.download(ticker, period="1y", interval="1d", progress=False)
             if len(df) < 60:
                 continue
-            
+
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
-            signal, price = calculate_black_buy_exact(df)
-            if signal:
-                msg = f"🚀 *ROMYO BLACK BUY SIGNAL*\n\n*Stock:* {symbol.replace('.NS','')}\n*Price:* ₹{price:.2f}\n*Timeframe:* 15 Min"
-                send_telegram(msg)
-        except Exception:
-            continue
+            signals = calculate_vix_mix_signals(df)
+
+            # Latest bar check
+            if signals[-1]:
+                latest_price = round(float(df['Close'].iloc[-1]), 2)
+                stock_name = ticker.replace('.NS', '')
+                alerts.append(f"🟢 *GREEN BUY SIGNAL*\n*Stock:* `{stock_name}`\n*Price:* ₹{latest_price}")
+        except Exception as e:
+            print(f"Error scanning {ticker}: {e}")
+
+    if alerts:
+        msg = "🚀 *VIX_MIX STRATEGY ALERTS*\n\n" + "\n\n---\n\n".join(alerts)
+        send_telegram_msg(msg)
+        print("Telegram alert bhej diya gaya!")
+    else:
+        print("Aaj koi Green Buy signal nahi mila.")
 
 if __name__ == "__main__":
-    run_scanner()
+    main()
