@@ -35,16 +35,14 @@ FNO_STOCKS = [
 
 def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram Credentials Missing!")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
-    res = requests.post(url, json=payload)
-    print(f"Telegram Response: {res.status_code}")
+    requests.post(url, json=payload)
 
-def process_strategy(df, lookback_bars=25):
+def process_strategy(df):
     if df.empty or len(df) < 60:
-        return []
+        return None, None
 
     pd_val, bbl, mult, lb, ph, pl = 22, 20, 2.0, 50, 0.99, 1.01
 
@@ -68,7 +66,8 @@ def process_strategy(df, lookback_bars=25):
     greenBuyTriggered = False
     blackBuyTriggered = False
 
-    signals = []
+    latest_signal = None
+    latest_price = None
 
     for i in range(len(df)):
         row = df.iloc[i]
@@ -100,8 +99,10 @@ def process_strategy(df, lookback_bars=25):
         if greenBuy:
             greenBuyTriggered = True
             blackBuyTriggered = False
-            if i >= len(df) - lookback_bars:
-                signals.append(("BUY (GREEN)", row['Close'], df.index[i]))
+            # Signal tabhi consider hoga jab wo current candle par bane
+            if i == len(df) - 1:
+                latest_signal = "BUY (GREEN)"
+                latest_price = row['Close']
 
         secondRedHigh = refHigh2
         isGreenCandle = row['Close'] > row['Open']
@@ -110,38 +111,31 @@ def process_strategy(df, lookback_bars=25):
         if blackBuy:
             blackBuyTriggered = True
             greenBuyTriggered = False
-            if i >= len(df) - lookback_bars:
-                signals.append(("BUY (BLACK)", row['Close'], df.index[i]))
+            # Signal tabhi consider hoga jab wo current candle par bane
+            if i == len(df) - 1:
+                latest_signal = "BUY (BLACK)"
+                latest_price = row['Close']
 
-    return signals
+    return latest_signal, latest_price
 
 def run_scanner():
-    send_telegram("🔍 *Vix_Mix Scanner Running...*\nScanning 180+ F&O Stocks for Signals...")
-
     try:
-        data = yf.download(FNO_STOCKS, period="10d", interval="15m", group_by='ticker', threads=True, progress=False)
-    except Exception as e:
-        print(f"Data Fetch Error: {e}")
+        data = yf.download(FNO_STOCKS, period="5d", interval="15m", group_by='ticker', threads=True, progress=False)
+    except Exception:
         return
 
-    signals_found = 0
     for symbol in FNO_STOCKS:
         try:
             df = data[symbol].dropna().copy() if symbol in data else None
             if df is None or df.empty:
                 continue
 
-            signals = process_strategy(df, lookback_bars=25)
-            for signal_type, price, signal_time in signals:
-                signals_found += 1
-                time_str = signal_time.strftime("%d-%b %H:%M")
-                msg = f"🚀 *VIX MIX SIGNAL ALERT*\n\n*Stock:* {symbol.replace('.NS','')}\n*Signal:* {signal_type}\n*Price:* ₹{price:.2f}\n*Time:* {time_str}\n*Timeframe:* 15 Min"
+            signal_type, price = process_strategy(df)
+            if signal_type:
+                msg = f"⚡ *LIVE SIGNAL ALERT*\n\n*Stock:* {symbol.replace('.NS','')}\n*Signal:* {signal_type}\n*Price:* ₹{price:.2f}\n*Timeframe:* 15 Min"
                 send_telegram(msg)
         except Exception:
             continue
-
-    if signals_found == 0:
-        send_telegram("✅ *Scan Complete*: No Buy signals found in recent bars.")
 
 if __name__ == "__main__":
     run_scanner()
