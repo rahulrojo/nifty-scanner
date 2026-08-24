@@ -3,6 +3,8 @@ import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
+from datetime import datetime
+import pytz
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -40,9 +42,22 @@ def send_telegram(msg):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     requests.post(url, json=payload)
 
+def is_market_open():
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist)
+    
+    # Monday = 0, Sunday = 6
+    if now.weekday() >= 5:
+        return False
+        
+    market_start = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    market_end = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    
+    return market_start <= now <= market_end
+
 def process_strategy(df):
     if df.empty or len(df) < 60:
-        return None, None
+        return None, None, None
 
     pd_val, bbl, mult, lb, ph, pl = 22, 20, 2.0, 50, 0.99, 1.01
 
@@ -68,6 +83,7 @@ def process_strategy(df):
 
     latest_signal = None
     latest_price = None
+    candle_time = None
 
     for i in range(len(df)):
         row = df.iloc[i]
@@ -99,10 +115,10 @@ def process_strategy(df):
         if greenBuy:
             greenBuyTriggered = True
             blackBuyTriggered = False
-            # Signal tabhi consider hoga jab wo current candle par bane
             if i == len(df) - 1:
                 latest_signal = "BUY (GREEN)"
                 latest_price = row['Close']
+                candle_time = df.index[i]
 
         secondRedHigh = refHigh2
         isGreenCandle = row['Close'] > row['Open']
@@ -111,14 +127,19 @@ def process_strategy(df):
         if blackBuy:
             blackBuyTriggered = True
             greenBuyTriggered = False
-            # Signal tabhi consider hoga jab wo current candle par bane
             if i == len(df) - 1:
                 latest_signal = "BUY (BLACK)"
                 latest_price = row['Close']
+                candle_time = df.index[i]
 
-    return latest_signal, latest_price
+    return latest_signal, latest_price, candle_time
 
 def run_scanner():
+    # Only scan during live market hours
+    if not is_market_open():
+        print("Market is currently CLOSED. Skipping scanner.")
+        return
+
     try:
         data = yf.download(FNO_STOCKS, period="5d", interval="15m", group_by='ticker', threads=True, progress=False)
     except Exception:
@@ -130,9 +151,10 @@ def run_scanner():
             if df is None or df.empty:
                 continue
 
-            signal_type, price = process_strategy(df)
-            if signal_type:
-                msg = f"⚡ *LIVE SIGNAL ALERT*\n\n*Stock:* {symbol.replace('.NS','')}\n*Signal:* {signal_type}\n*Price:* ₹{price:.2f}\n*Timeframe:* 15 Min"
+            signal_type, price, candle_time = process_strategy(df)
+            if signal_type and candle_time is not None:
+                time_str = candle_time.strftime("%d-%b %H:%M")
+                msg = f"⚡ *LIVE SIGNAL ALERT*\n\n*Stock:* {symbol.replace('.NS','')}\n*Signal:* {signal_type}\n*Price:* ₹{price:.2f}\n*Candle Time:* {time_str}\n*Timeframe:* 15 Min"
                 send_telegram(msg)
         except Exception:
             continue
