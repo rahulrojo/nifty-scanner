@@ -97,3 +97,12 @@ def calculate_vix_mix(symbol="^NSEI", period="60d", interval="1d"):
 
 if __name__ == "__main__":
     calculate_vix_mix("^NSEI") # Yahan apna favorite stock symbol daal sakte hain
+if __name__ == "__main__":
+    # Apni stock list yahan daalein (NSE stocks ke aage .NS lagayein)
+    symbols = ["^NSEI", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "TATAMOTORS.NS"]
+    
+    for symbol in symbols:
+        try:
+            calculate_vix_mix(symbol)
+        except Exception as e:
+            print(f"Error scanning {symbol}: {e}")
