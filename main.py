@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 
-# Telegram Credentials (GitHub Secrets se aayenge)
+# Telegram Credentials
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -16,58 +16,97 @@ def send_telegram(message):
     except Exception as e:
         print(f"Telegram Send Error: {e}")
 
-# Script run hote hi sabse pehle ye message jayega
-send_telegram("🚀 *Vix_Mix Bot Run ho gaya hai!* Market analysis shuru ho raha hai...")
+# Major Indices + FnO Stocks List
+INDICES = [
+    "^NSEI",         # Nifty 50
+    "^NSEBANK",      # Nifty Bank
+    "^CNXIT",        # Nifty IT
+    "^CNXAUTO",      # Nifty Auto
+    "^CNXPHARMA",    # Nifty Pharma
+    "^CNXFMCG",      # Nifty FMCG
+    "^CNXMETAL",     # Nifty Metal
+    "^CNXENERGY",    # Nifty Energy
+    "^CNXREALTY",    # Nifty Realty
+    "^CNX100",       # Nifty 100
+    "^BSESN"         # Sensex
+]
 
-def calculate_vix_mix(symbol="^NSEI", period="60d", interval="1d"):
-    # Stock / Index Data download (Default: Nifty 50)
-    df = yf.download(symbol, period=period, interval=interval, progress=False)
-    if df.empty:
-        send_telegram("⚠️ Market data load nahi ho paya.")
+FNO_STOCKS = [
+    "AARTIIND.NS", "ABB.NS", "ABBOTINDIA.NS", "ABCAPITAL.NS", "ABFRL.NS", 
+    "ACC.NS", "ADANIENT.NS", "ADANIPORTS.NS", "ALKEM.NS", "AMBUJACEMENT.NS", "APOLLOHOSP.NS", 
+    "APOLLOTYRE.NS", "ASHOKLEY.NS", "ASIANPAINT.NS", "ASTRAL.NS", "ATUL.NS", "AUBANK.NS", 
+    "AUROPHARMA.NS", "AXISBANK.NS", "BAJAJ-AUTO.NS", "BAJAJFINSV.NS", "BAJFINANCE.NS", 
+    "BALKRISIND.NS", "BANDHANBNK.NS", "BANKBARODA.NS", "BATAINDIA.NS", "BEL.NS", "BERGEPAINT.NS", 
+    "BHARATFORG.NS", "BHARTIARTL.NS", "BHEL.NS", "BIOCON.NS", "BPCL.NS", "BRITANNIA.NS", 
+    "BSOFT.NS", "CANBK.NS", "CANFINHOME.NS", "CHAMBLFERT.NS", "CHOLAFIN.NS", "CIPLA.NS", 
+    "COALINDIA.NS", "COFORGE.NS", "COLPAL.NS", "CONCOR.NS", "COROMANDEL.NS", "CROMPTON.NS", 
+    "CUMMINSIND.NS", "DABUR.NS", "DALBHARAT.NS", "DEEPAKNTR.NS", "DIVISLAB.NS", "DIXON.NS", 
+    "DLF.NS", "DRREDDY.NS", "EICHERMOT.NS", "ESCORTS.NS", "EXIDEIND.NS", "FEDERALBNK.NS", 
+    "GAIL.NS", "GLENMARK.NS", "GMRAIRPORT.NS", "GNFC.NS", "GODREJCP.NS", "GODREJPROP.NS", 
+    "GRANULES.NS", "GRASIM.NS", "HAL.NS", "HAVELLS.NS", "HCLTECH.NS", 
+    "HDFCBANK.NS", "HDFCLIFE.NS", "HEROMOTOCO.NS", "HINDALCO.NS", "HINDCOPPER.NS", 
+    "HINDPETRO.NS", "HINDUNILVR.NS", "ICICIBANK.NS", "ICICIGI.NS", "ICICIPRULI.NS", "IDEA.NS", 
+    "IDFCFIRSTB.NS", "IEX.NS", "IGL.NS", "INDHOTEL.NS", "INDIAMART.NS", 
+    "INDIGO.NS", "INDUSINDBK.NS", "INDUSTOWER.NS", "INFY.NS", "IOC.NS", "IPCALAB.NS", 
+    "IRCTC.NS", "ITC.NS", "JINDALSTEL.NS", "JKCEMENT.NS", "JSWSTEEL.NS", "JUBLFOOD.NS", 
+    "KALYANKJIL.NS", "KEI.NS", "KOTAKBANK.NS", "LALPATHLAB.NS", "LAURUSLABS.NS", "LICHSGFIN.NS", 
+    "LTIM.NS", "LT.NS", "LUPIN.NS", "M&M.NS", "M&MFIN.NS", "MANAPPURAM.NS", 
+    "MARICO.NS", "MARUTI.NS", "MCX.NS", "METROPOLIS.NS", "MFSL.NS", "MGL.NS", "MOTHERSON.NS", 
+    "MPHASIS.NS", "MRF.NS", "MUTHOOTFIN.NS", "NATIONALUM.NS", "NAVINFLUOR.NS", "NESTLEIND.NS", 
+    "NMDC.NS", "NTPC.NS", "OBEROIRLTY.NS", "OFSS.NS", "OIL.NS", "ONGC.NS", "PAGEIND.NS", 
+    "PERSISTENT.NS", "PETRONET.NS", "PFC.NS", "PIDILITIND.NS", "PIIND.NS", "PNB.NS", 
+    "POLYCAB.NS", "POWERGRID.NS", "PVRINOX.NS", "RAMCOCEM.NS", "RBLBANK.NS", "RECLTD.NS", 
+    "RELIANCE.NS", "SAIL.NS", "SBICARD.NS", "SBILIFE.NS", "SBIN.NS", "SHREECEM.NS", 
+    "SHRIRAMFIN.NS", "SIEMENS.NS", "SRF.NS", "SUNPHARMA.NS", "SUNTV.NS", "SYNGENE.NS", 
+    "TATACHEMICALS.NS", "TATACONSUM.NS", "TATELXSI.NS", "TATAMOTORS.NS", "TATAPOWER.NS", 
+    "TATASTEEL.NS", "TCS.NS", "TECHM.NS", "TITAN.NS", "TORNTPHARM.NS", "TORNTPOWER.NS", 
+    "TRENT.NS", "TVSMOTOR.NS", "UBL.NS", "ULTRACEMCO.NS", "UNIONBANK.NS", "UPL.NS", 
+    "VEDL.NS", "VOLTAS.NS", "WIPRO.NS", "ZEEL.NS"
+]
+
+ALL_WATCHLIST = INDICES + FNO_STOCKS
+
+def check_vix_mix(symbol):
+    df = yf.download(symbol, period="60d", interval="1d", progress=False)
+    if df.empty or len(df) < 50:
         return
 
-    # Pine script parameters
-    pd_val = 22
-    bbl = 20
-    mult = 2.0
-    lb = 50
-    ph = 0.99
-    pl = 1.01
+    # MultiIndex dataframe handling
+    if isinstance(df.columns, pd.MultiIndex):
+        close = df['Close'][symbol]
+        low = df['Low'][symbol]
+        high = df['High'][symbol]
+    else:
+        close = df['Close']
+        low = df['Low']
+        high = df['High']
 
-    close = df['Close']
-    low = df['Low']
-    high = df['High']
+    pd_val, bbl, mult, lb, ph, pl = 22, 20, 2.0, 50, 0.99, 1.01
 
-    # Williams Vix Fix Formula
     highest_close = close.rolling(pd_val).max()
     wvf = ((highest_close - low) / highest_close) * 100
 
-    # Bollinger Bands for WVF
     mid_line = wvf.rolling(bbl).mean()
     s_dev = mult * wvf.rolling(bbl).std()
     upper_band = mid_line + s_dev
     lower_band = mid_line - s_dev
 
-    # Percentile High / Low
     range_high = wvf.rolling(lb).max() * ph
     range_low = wvf.rolling(lb).min() * pl
 
-    df['isGreenVix'] = (wvf >= upper_band) | (wvf >= range_high)
-    df['isRedVix']   = (wvf <= lower_band) | (wvf <= range_low)
-    df['wvf'] = wvf
+    is_green_vix = (wvf >= upper_band) | (wvf >= range_high)
+    is_red_vix   = (wvf <= lower_band) | (wvf <= range_low)
 
-    # Cluster & Signal Logic
     box_highs = []
     min_red_wvf = None
     min_red_high = None
     in_cluster = False
 
     for i in range(len(df)):
-        is_green = df['isGreenVix'].iloc[i]
-        is_red = df['isRedVix'].iloc[i]
+        is_green = is_green_vix.iloc[i]
+        is_red = is_red_vix.iloc[i]
         c_high = high.iloc[i]
-        c_low = low.iloc[i]
-        c_wvf = df['wvf'].iloc[i]
+        c_wvf = wvf.iloc[i]
 
         if is_green:
             if in_cluster and min_red_high is not None:
@@ -83,26 +122,22 @@ def calculate_vix_mix(symbol="^NSEI", period="60d", interval="1d"):
                 min_red_wvf = c_wvf
                 min_red_high = c_high
 
-    # Signal Check on latest candle
     if len(box_highs) >= 2:
         breakout_level = max(box_highs[-1], box_highs[-2])
         last_close = close.iloc[-1]
         prev_close = close.iloc[-2]
 
-        # Breakout condition check
+        # Breakout alert trigger
         if prev_close <= breakout_level and last_close > breakout_level:
-            send_telegram(f"🟢 *GREEN BUY SIGNAL GENERATED!*\nSymbol: {symbol}\nPrice: {last_close}")
-        else:
-            send_telegram(f"📊 *Analysis Complete:* Abhi koi naya Buy Signal nahi hai.\nLatest Price: {last_close}")
+            is_index = symbol.startswith("^")
+            label_type = "📊 INDEX SIGNAL" if is_index else "📈 STOCK SIGNAL"
+            send_telegram(f"🟢 *GREEN BUY SIGNAL DETECTED!*\n\n{label_type}: `{symbol}`\n💰 *Current Price:* {last_close:.2f}\n🎯 *Breakout Level:* {breakout_level:.2f}")
 
 if __name__ == "__main__":
-    calculate_vix_mix("^NSEI") # Yahan apna favorite stock symbol daal sakte hain
-if __name__ == "__main__":
-    # Apni stock list yahan daalein (NSE stocks ke aage .NS lagayein)
-    symbols = ["^NSEI", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "TATAMOTORS.NS"]
-    
-    for symbol in symbols:
+    send_telegram(f"🚀 *Vix_Mix Scanner Started!*\nScanning {len(INDICES)} Indices & {len(FNO_STOCKS)} FnO Stocks...")
+    for item in ALL_WATCHLIST:
         try:
-            calculate_vix_mix(symbol)
+            check_vix_mix(item)
         except Exception as e:
-            print(f"Error scanning {symbol}: {e}")
+            print(f"Error scanning {item}: {e}")
+    send_telegram("✅ *Scan Complete!* All Indices & FnO stocks scanned.")
