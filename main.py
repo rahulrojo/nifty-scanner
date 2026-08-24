@@ -42,9 +42,9 @@ def send_telegram(msg):
     res = requests.post(url, json=payload)
     print(f"Telegram Response: {res.status_code}")
 
-def process_strategy(df):
+def process_strategy(df, lookback_bars=25):
     if df.empty or len(df) < 60:
-        return None, None
+        return []
 
     pd_val, bbl, mult, lb, ph, pl = 22, 20, 2.0, 50, 0.99, 1.01
 
@@ -68,8 +68,7 @@ def process_strategy(df):
     greenBuyTriggered = False
     blackBuyTriggered = False
 
-    latest_signal = None
-    latest_price = None
+    signals = []
 
     for i in range(len(df)):
         row = df.iloc[i]
@@ -101,9 +100,8 @@ def process_strategy(df):
         if greenBuy:
             greenBuyTriggered = True
             blackBuyTriggered = False
-            if i >= len(df) - 3:
-                latest_signal = "BUY (GREEN)"
-                latest_price = row['Close']
+            if i >= len(df) - lookback_bars:
+                signals.append(("BUY (GREEN)", row['Close'], df.index[i]))
 
         secondRedHigh = refHigh2
         isGreenCandle = row['Close'] > row['Open']
@@ -112,15 +110,13 @@ def process_strategy(df):
         if blackBuy:
             blackBuyTriggered = True
             greenBuyTriggered = False
-            if i >= len(df) - 3:
-                latest_signal = "BUY (BLACK)"
-                latest_price = row['Close']
+            if i >= len(df) - lookback_bars:
+                signals.append(("BUY (BLACK)", row['Close'], df.index[i]))
 
-    return latest_signal, latest_price
+    return signals
 
 def run_scanner():
-    # TEST MESSAGE to verify Telegram connection
-    send_telegram("🔍 *Vix_Mix Scanner Active*\nScanning 180+ F&O Stocks...")
+    send_telegram("🔍 *Vix_Mix Scanner Running...*\nScanning 180+ F&O Stocks for Signals...")
 
     try:
         data = yf.download(FNO_STOCKS, period="10d", interval="15m", group_by='ticker', threads=True, progress=False)
@@ -135,16 +131,17 @@ def run_scanner():
             if df is None or df.empty:
                 continue
 
-            signal_type, price = process_strategy(df)
-            if signal_type:
+            signals = process_strategy(df, lookback_bars=25)
+            for signal_type, price, signal_time in signals:
                 signals_found += 1
-                msg = f"🚀 *VIX MIX SIGNAL ALERT*\n\n*Stock:* {symbol.replace('.NS','')}\n*Signal:* {signal_type}\n*Price:* ₹{price:.2f}\n*Timeframe:* 15 Min"
+                time_str = signal_time.strftime("%d-%b %H:%M")
+                msg = f"🚀 *VIX MIX SIGNAL ALERT*\n\n*Stock:* {symbol.replace('.NS','')}\n*Signal:* {signal_type}\n*Price:* ₹{price:.2f}\n*Time:* {time_str}\n*Timeframe:* 15 Min"
                 send_telegram(msg)
         except Exception:
             continue
 
     if signals_found == 0:
-        send_telegram("✅ *Scan Complete*: No new Buy signals on current 15m candle.")
+        send_telegram("✅ *Scan Complete*: No Buy signals found in recent bars.")
 
 if __name__ == "__main__":
     run_scanner()
