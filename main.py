@@ -35,10 +35,12 @@ FNO_STOCKS = [
 
 def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram Credentials Missing!")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
-    requests.post(url, json=payload)
+    res = requests.post(url, json=payload)
+    print(f"Telegram Response: {res.status_code}")
 
 def process_strategy(df):
     if df.empty or len(df) < 60:
@@ -46,7 +48,6 @@ def process_strategy(df):
 
     pd_val, bbl, mult, lb, ph, pl = 22, 20, 2.0, 50, 0.99, 1.01
 
-    # WVF Calculations
     df['highestClose'] = df['Close'].rolling(window=pd_val).max()
     df['wvf'] = np.where(df['highestClose'] != 0, ((df['highestClose'] - df['Low']) / df['highestClose']) * 100, 0)
     df['sDev'] = mult * df['wvf'].rolling(window=bbl).std()
@@ -62,10 +63,8 @@ def process_strategy(df):
     inCluster = False
     minRedWvf = None
     minRedHigh = None
-    minRedLow = None
 
     boxHighs = []
-    
     greenBuyTriggered = False
     blackBuyTriggered = False
 
@@ -96,18 +95,16 @@ def process_strategy(df):
         refHigh2 = boxHighs[-2] if canBuy else None
         breakoutLevel = max(refHigh1, refHigh2) if canBuy else None
 
-        # Green Buy Logic: Crossover above breakoutLevel
         prev_close = df.iloc[i-1]['Close'] if i > 0 else row['Close']
         greenBuy = canBuy and (not greenBuyTriggered) and (prev_close <= breakoutLevel) and (row['Close'] > breakoutLevel)
 
         if greenBuy:
             greenBuyTriggered = True
             blackBuyTriggered = False
-            if i >= len(df) - 2:  # Check last 2 bars for fresh signal
-                latest_signal = "GREEN BUY"
+            if i >= len(df) - 3:
+                latest_signal = "BUY (GREEN)"
                 latest_price = row['Close']
 
-        # Black Buy Logic: Low > 2nd Red VIX High on Green Candle after Green Buy
         secondRedHigh = refHigh2
         isGreenCandle = row['Close'] > row['Open']
         blackBuy = greenBuyTriggered and (not blackBuyTriggered) and isGreenCandle and (secondRedHigh is not None) and (row['Low'] > secondRedHigh)
@@ -115,18 +112,23 @@ def process_strategy(df):
         if blackBuy:
             blackBuyTriggered = True
             greenBuyTriggered = False
-            if i >= len(df) - 2:  # Check last 2 bars for fresh signal
-                latest_signal = "BLACK BUY"
+            if i >= len(df) - 3:
+                latest_signal = "BUY (BLACK)"
                 latest_price = row['Close']
 
     return latest_signal, latest_price
 
 def run_scanner():
+    # TEST MESSAGE to verify Telegram connection
+    send_telegram("🔍 *Vix_Mix Scanner Active*\nScanning 180+ F&O Stocks...")
+
     try:
         data = yf.download(FNO_STOCKS, period="10d", interval="15m", group_by='ticker', threads=True, progress=False)
-    except Exception:
+    except Exception as e:
+        print(f"Data Fetch Error: {e}")
         return
 
+    signals_found = 0
     for symbol in FNO_STOCKS:
         try:
             df = data[symbol].dropna().copy() if symbol in data else None
@@ -135,10 +137,14 @@ def run_scanner():
 
             signal_type, price = process_strategy(df)
             if signal_type:
+                signals_found += 1
                 msg = f"🚀 *VIX MIX SIGNAL ALERT*\n\n*Stock:* {symbol.replace('.NS','')}\n*Signal:* {signal_type}\n*Price:* ₹{price:.2f}\n*Timeframe:* 15 Min"
                 send_telegram(msg)
         except Exception:
             continue
+
+    if signals_found == 0:
+        send_telegram("✅ *Scan Complete*: No new Buy signals on current 15m candle.")
 
 if __name__ == "__main__":
     run_scanner()
