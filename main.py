@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
+from datetime import datetime, timezone, timedelta
 
 # Telegram Settings
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -96,7 +97,7 @@ def scan_vix_mix_balanced(ticker):
         buy_reentry = (curr['Low'] <= curr['P_Lower'] or prev['Low'] <= prev['P_Lower']) and (curr['Close'] > curr['Open']) and (curr['Close'] > curr['P_Lower'])
         sell_reentry = (curr['High'] >= curr['P_Upper'] or prev['High'] >= prev['P_Upper']) and (curr['Close'] < curr['Open']) and (curr['Close'] < curr['P_Upper'])
 
-        # Strict RSI Filters applied here
+        # Strict RSI Filters
         rsi_buy_ok = curr['RSI'] <= 42
         rsi_sell_ok = curr['RSI'] >= 58
 
@@ -105,12 +106,16 @@ def scan_vix_mix_balanced(ticker):
         low_price = round(float(curr['Low']), 2)
         high_price = round(float(curr['High']), 2)
 
+        # Current IST Timestamp
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        signal_time = datetime.now(ist_tz).strftime("%I:%M %p (%d %b)")
+
         if panic_turning and buy_reentry and rsi_buy_ok:
-            msg = f"🟢 *VIX MIX BALANCED BUY SIGNAL (15m)* 🟢\n\n*Stock:* {stock_name}\n*Price:* ₹{close_price}\n*StopLoss Zone:* ₹{low_price}\n*RSI:* {round(float(curr['RSI']), 1)}"
+            msg = f"🟢 *VIX MIX BALANCED BUY SIGNAL (15m)* 🟢\n\n*Stock:* {stock_name}\n*Price:* ₹{close_price}\n*StopLoss Zone:* ₹{low_price}\n*RSI:* {round(float(curr['RSI']), 1)}\n*Time:* ⏰ {signal_time}"
             send_telegram(msg)
 
         elif euphoria_turning and sell_reentry and rsi_sell_ok:
-            msg = f"🔴 *VIX MIX BALANCED SELL SIGNAL (15m)* 🔴\n\n*Stock:* {stock_name}\n*Price:* ₹{close_price}\n*StopLoss Zone:* ₹{high_price}\n*RSI:* {round(float(curr['RSI']), 1)}"
+            msg = f"🔴 *VIX MIX BALANCED SELL SIGNAL (15m)* 🔴\n\n*Stock:* {stock_name}\n*Price:* ₹{close_price}\n*StopLoss Zone:* ₹{high_price}\n*RSI:* {round(float(curr['RSI']), 1)}\n*Time:* ⏰ {signal_time}"
             send_telegram(msg)
 
     except Exception as e:
