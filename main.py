@@ -32,7 +32,7 @@ def send_telegram(message):
         if response.status_code != 200:
             print(f"Telegram API Error [{response.status_code}]: {response.text}")
         else:
-            print("Message sent successfully to Telegram!")
+            print("Signal sent successfully to Telegram!")
         return response.status_code == 200
     except Exception as e:
         print(f"Exception while sending Telegram message: {e}")
@@ -118,7 +118,7 @@ def scan_vix_mix_balanced(ticker):
 if __name__ == "__main__":
     print("🚀 VIX Mix Balanced Scanner Started...")
     
-    # Sabhi stocks ko scan karega
+    # Scans all FnO stocks silently. Signals are sent ONLY on valid triggers.
     for stock in FNO_STOCKS:
         scan_vix_mix_balanced(stock)
         
