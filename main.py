@@ -3,22 +3,58 @@ import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
+from datetime import datetime, timezone, timedelta
 
 # Telegram Settings
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = "-1003921675472"
 
-# FnO Stocks List
+# Complete NSE FnO Stocks List (~180 Stocks)
 FNO_STOCKS = [
-    "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS",
-    "SBIN.NS", "BHARTIARTL.NS", "TATAMOTORS.NS", "AXISBANK.NS", "BAJFINANCE.NS",
-    "LTIM.NS", "MARUTI.NS", "NTPC.NS", "ONGC.NS", "POWERGRID.NS", "SUNPHARMA.NS",
-    "TATASTEEL.NS", "TECHM.NS", "TITAN.NS", "ULTRACEMCO.NS", "WIPRO.NS", "VOLTAS.NS",
-    "ASTRAL.NS", "INDHOTEL.NS", "GRASIM.NS", "TORNTPHARM.NS", "BHARATFORG.NS",
-    "ABCAPITAL.NS", "HINDZINC.NS", "CGPOWER.NS", "SHRIRAMFIN.NS", "JINDALSTEL.NS",
-    "KOTAKBANK.NS", "LT.NS", "M&M.NS", "HEROMOTOCO.NS", "EICHERMOT.NS", "HAL.NS",
-    "BEL.NS", "COALINDIA.NS", "BPCL.NS", "IOC.NS", "DLF.NS", "GODREJPROP.NS"
+    "AARTIIND.NS", "ABB.NS", "ABBOTINDIA.NS", "ABCAPITAL.NS", "ABFRL.NS", "ACC.NS", "ADANIENT.NS", 
+    "ADANIPORTS.NS", "ALKEM.NS", "AMBUJACEM.NS", "APOLLOHOSP.NS", "APOLLOTYRE.NS", "ASHOKLEY.NS", 
+    "ASTRAL.NS", "ATUL.NS", "AUBANK.NS", "AUROPHARMA.NS", "AXISBANK.NS", "BAJAJ-AUTO.NS", 
+    "BAJAJFINSV.NS", "BAJFINANCE.NS", "BALKRISIND.NS", "BALRAMCHIN.NS", "BANDHANBNK.NS", 
+    "BANKBARODA.NS", "BANKINDIA.NS", "BATAINDIA.NS", "BEL.NS", "BHARATFORG.NS", "BHARTIARTL.NS", 
+    "BHEL.NS", "BIOCON.NS", "BPCL.NS", "BRITANNIA.NS", "BSOFT.NS", "CANBK.NS", "CANFINHOME.NS", 
+    "CHAMBLFERT.NS", "CHOLAFIN.NS", "CIPLA.NS", "COALINDIA.NS", "COFORGE.NS", "COLPAL.NS", 
+    "CONCOR.NS", "COROMANDEL.NS", "CROMPTON.NS", "CUMMINSIND.NS", "DABUR.NS", "DALBHARAT.NS", 
+    "DEEPAKNTR.NS", "DIVISLAB.NS", "DIXON.NS", "DLF.NS", "DRREDDY.NS", "EICHERMOT.NS", 
+    "ESCORTS.NS", "EXIDEIND.NS", "GAIL.NS", "GLENMARK.NS", "GODREJCP.NS", "GODREJPROP.NS", 
+    "GRANULES.NS", "GRASIM.NS", "GUJGASLTD.NS", "HAL.NS", "HAVELLS.NS", "HCLTECH.NS", 
+    "HDFCBANK.NS", "HDFCLIFE.NS", "HEROMOTOCO.NS", "HINDALCO.NS", "HINDCOPPER.NS", 
+    "HINDPETRO.NS", "HINDUNILVR.NS", "ICICIBANK.NS", "ICICIGI.NS", "ICICIPRULI.NS", "IDEA.NS", 
+    "IDFCFIRSTB.NS", "IEX.NS", "IGL.NS", "INDHOTEL.NS", "INDIACEM.NS", "INDIAMART.NS", 
+    "INDIGO.NS", "INDUSINDBK.NS", "INDUSTOWER.NS", "INFY.NS", "IOC.NS", "IPCALAB.NS", 
+    "IRCTC.NS", "ITC.NS", "JINDALSTEL.NS", "JIOFIN.NS", "JKCEMENT.NS", "JSWSTEEL.NS", 
+    "JUBLFOOD.NS", "KOTAKBANK.NS", "LALPATHLAB.NS", "LAURUSLABS.NS", "LICHSGFIN.NS", 
+    "LT.NS", "LTIM.NS", "LTTS.NS", "LUPIN.NS", "M&M.NS", "M&MFIN.NS", "MANAPPURAM.NS", 
+    "MARICO.NS", "MARUTI.NS", "MCDOWELL-N.NS", "MCX.NS", "METROPOLIS.NS", "MFSL.NS", 
+    "MGL.NS", "MOTHERSON.NS", "MPHASIS.NS", "MRF.NS", "MUTHOOTFIN.NS", "NATIONALUM.NS", 
+    "NAUKRI.NS", "NAVINFLUOR.NS", "NESTLEIND.NS", "NMDC.NS", "NTPC.NS", "OBEROIRLTY.NS", 
+    "OFSS.NS", "ONGC.NS", "PAGEIND.NS", "PERSISTENT.NS", "PETRONET.NS", "PFC.NS", 
+    "PIDILITIND.NS", "PIIND.NS", "PNB.NS", "POLYCAB.NS", "POWERGRID.NS", "PVRINOX.NS", 
+    "RAMCOCEM.NS", "RBLBANK.NS", "REC.NS", "RELIANCE.NS", "SAIL.NS", "SBICARD.NS", 
+    "SBILIFE.NS", "SBIN.NS", "SHREECEM.NS", "SHRIRAMFIN.NS", "SIEMENS.NS", "SRF.NS", 
+    "SUNPHARMA.NS", "SUNTV.NS", "SYNGENE.NS", "TATACHEMICALS.NS", "TATACOMM.NS", 
+    "TATACONSUM.NS", "TATAMOTORS.NS", "TATAPOWER.NS", "TATASTEEL.NS", "TCS.NS", "TECHM.NS", 
+    "TITAN.NS", "TORNTPHARM.NS", "TRENT.NS", "TVSMOTOR.NS", "UBL.NS", "ULTRACEMCO.NS", 
+    "UPL.NS", "VEDL.NS", "VOLTAS.NS", "WIPRO.NS", "ZEEL.NS", "ZYDUSLIFE.NS"
 ]
+
+def is_market_open():
+    ist_tz = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(ist_tz)
+    
+    # Check Weekend (Saturday = 5, Sunday = 6)
+    if now_ist.weekday() >= 5:
+        return False
+        
+    # Indian Market Timing (9:15 AM to 3:30 PM IST)
+    market_start = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+    market_end = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+    
+    return market_start <= now_ist <= market_end
 
 def send_telegram(message):
     if not BOT_TOKEN:
@@ -100,18 +136,25 @@ def scan_vix_mix_balanced(ticker):
         rsi_buy_ok = curr['RSI'] <= 42
         rsi_sell_ok = curr['RSI'] >= 58
 
+        # Candle Timestamp Validation
+        candle_dt = pd.to_datetime(df.index[-2])
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        if candle_dt.tzinfo is None:
+            candle_dt = candle_dt.tz_localize('UTC').tz_convert(ist_tz)
+        else:
+            candle_dt = candle_dt.tz_convert(ist_tz)
+
+        now_ist = datetime.now(ist_tz)
+        time_diff = (now_ist - candle_dt).total_seconds() / 60
+
+        # Reject if candle is older than 25 minutes
+        if time_diff > 25:
+            return
+
         stock_name = ticker.replace(".NS", "")
         close_price = round(float(curr['Close']), 2)
         low_price = round(float(curr['Low']), 2)
         high_price = round(float(curr['High']), 2)
-
-        # Extracting Chart Candle Time (Converted to IST)
-        candle_dt = pd.to_datetime(df.index[-2])
-        if candle_dt.tzinfo is None:
-            candle_dt = candle_dt.tz_localize('UTC').tz_convert('Asia/Kolkata')
-        else:
-            candle_dt = candle_dt.tz_convert('Asia/Kolkata')
-            
         candle_time_str = candle_dt.strftime("%I:%M %p")
 
         if panic_turning and buy_reentry and rsi_buy_ok:
@@ -126,9 +169,10 @@ def scan_vix_mix_balanced(ticker):
         print(f"Error scanning {ticker}: {e}")
 
 if __name__ == "__main__":
-    print("🚀 VIX Mix Strict Scanner Started...")
-    
-    for stock in FNO_STOCKS:
-        scan_vix_mix_balanced(stock)
-        
-    print("✅ Market scan finished successfully.")
+    if not is_market_open():
+        print("⏸️ Market is currently CLOSED (Outside 9:15 AM - 3:30 PM IST). Skipping scan.")
+    else:
+        print("🚀 VIX Mix Strict Scanner Started...")
+        for stock in FNO_STOCKS:
+            scan_vix_mix_balanced(stock)
+        print("✅ Market scan finished successfully.")
