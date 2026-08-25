@@ -7,7 +7,6 @@ import yfinance as yf
 # Telegram Settings
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = "-1003921675472"
-TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
 
 # FnO Stocks List
 FNO_STOCKS = [
@@ -22,13 +21,19 @@ FNO_STOCKS = [
 ]
 
 def send_telegram(message):
+    if not BOT_TOKEN:
+        print("❌ ERROR: BOT_TOKEN secret is missing in GitHub!")
+        return False
+        
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
         response = requests.post(url, json=payload)
+        print(f"Telegram API Response Code: {response.status_code}")
+        print(f"Telegram API Response Text: {response.text}")
         return response.status_code == 200
     except Exception as e:
-        print(f"Error sending Telegram message: {e}")
+        print(f"❌ Exception while sending Telegram message: {e}")
         return False
 
 def calculate_rsi(series, period=14):
@@ -58,7 +63,7 @@ def scan_vix_mix_balanced(ticker):
         # 2. RSI Calculation
         df['RSI'] = calculate_rsi(df['Close'], 14)
 
-        # 3. Dorogaforwest VIX Mix Calculations
+        # 3. VIX Mix Calculations
         highest_close_22 = df['Close'].rolling(22).max()
         df['WVF_Buy'] = ((highest_close_22 - df['Low']) / highest_close_22) * 100
         wvf_buy_mid = df['WVF_Buy'].rolling(20).mean()
@@ -109,9 +114,11 @@ def scan_vix_mix_balanced(ticker):
         print(f"Error scanning {ticker}: {e}")
 
 if __name__ == "__main__":
-    if TEST_MODE:
-        send_telegram("🧪 *BALANCED SCANNER ONLINE* 🧪\n\nNaya Balanced Code Active Ho Gaya Hai!")
-        print("Test Message Sent.")
+    print("🚀 Script execution started. Sending test message...")
+    # Yeh line run hote hi turant Telegram par test message bhej degi
+    send_telegram("🧪 *TEST MESSAGE:* Bot is successfully connected and running!")
     
+    print("📊 Starting market scan for FnO stocks...")
     for stock in FNO_STOCKS:
         scan_vix_mix_balanced(stock)
+    print("✅ Market scan completed.")
