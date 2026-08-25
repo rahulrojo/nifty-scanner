@@ -118,9 +118,6 @@ def scan_vix_mix_balanced(ticker):
 if __name__ == "__main__":
     print("🚀 VIX Mix Balanced Scanner Started...")
     
-    # Yeh test signal har baar run hone par sabse pehle aayega
-    send_telegram("🚀 *VIX MIX SCANNER ONLINE*\n\nBot is running and scanning all FnO stocks...")
-    
     # Sabhi stocks ko scan karega
     for stock in FNO_STOCKS:
         scan_vix_mix_balanced(stock)
