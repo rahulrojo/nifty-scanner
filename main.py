@@ -96,8 +96,9 @@ def scan_vix_mix_balanced(ticker):
         buy_reentry = (curr['Low'] <= curr['P_Lower'] or prev['Low'] <= prev['P_Lower']) and (curr['Close'] > curr['Open']) and (curr['Close'] > curr['P_Lower'])
         sell_reentry = (curr['High'] >= curr['P_Upper'] or prev['High'] >= prev['P_Upper']) and (curr['Close'] < curr['Open']) and (curr['Close'] < curr['P_Upper'])
 
-        rsi_buy_ok = curr['RSI'] <= 45
-        rsi_sell_ok = curr['RSI'] >= 55
+        # Strict RSI Filters applied here
+        rsi_buy_ok = curr['RSI'] <= 42
+        rsi_sell_ok = curr['RSI'] >= 58
 
         stock_name = ticker.replace(".NS", "")
         close_price = round(float(curr['Close']), 2)
@@ -116,9 +117,8 @@ def scan_vix_mix_balanced(ticker):
         print(f"Error scanning {ticker}: {e}")
 
 if __name__ == "__main__":
-    print("🚀 VIX Mix Balanced Scanner Started...")
+    print("🚀 VIX Mix Strict Scanner Started...")
     
-    # Scans all FnO stocks silently. Signals are sent ONLY on valid triggers.
     for stock in FNO_STOCKS:
         scan_vix_mix_balanced(stock)
         
