@@ -1,35 +1,36 @@
-name: FnO VIX Mix Scanner
+name: Stock Scanner
 
 on:
   schedule:
-    - cron: '*/15 3-10 * * 1-5'
-  workflow_dispatch:
+    # Har 15-minute candle close hone ke 1 min baad chalega (IST ke hisaab se 9:31, 9:46, 10:01...)
+    - cron: '1,16,31,46 * * * 1-5'
+  workflow_dispatch: # GitHub se manually run karne ke liye
 
 jobs:
-  scan:
+  run-scanner:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yfinance pandas numpy requests pytz
+          pip install pandas numpy yfinance requests pytz
 
-      - name: Run Market Scanner
+      - name: Run Main Scanner Script
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python main.py
 
-      - name: Commit and Push Sent Signals Log
+      - name: Commit and Push Updated Signals State
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
