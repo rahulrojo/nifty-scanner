@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import pytz
 
 # ==========================================
-# 1. COMPLETE NSE F&O STOCKS LIST
+# 1. NSE F&O STOCKS LIST
 # ==========================================
 STOCKS = [
     "AARTIIND.NS", "ABB.NS", "ABBOTINDIA.NS", "ABCAPITAL.NS", "ABFRL.NS", "ACC.NS", 
@@ -37,14 +37,13 @@ STOCKS = [
     "PFC.NS", "PIDILITIND.NS", "PIIND.NS", "PNB.NS", "POLYCAB.NS", "POWERGRID.NS", 
     "PVRINOX.NS", "RAMCOCEM.NS", "RBLBANK.NS", "RECLTD.NS", "RELIANCE.NS", "SAIL.NS", 
     "SBICARD.NS", "SBILIFE.NS", "SBIN.NS", "SHREECEM.NS", "SHRIRAMFIN.NS", "SIEMENS.NS", 
-    "SRF.NS", "SUNPHARMA.NS", "SUNTV.NS", "SYNGENE.NS", "TATACOMM.NS", "TATACONSUM.NS", 
+    "SRF.NS", "SUNPHARMA.NS", "SUNTV.NS", "SYNGENE.NS", "TATACONSUM.NS", 
     "TATAMOTORS.NS", "TATAPOWER.NS", "TATASTEEL.NS", "TCS.NS", "TECHM.NS", "TITAN.NS", 
     "TORNTPHARM.NS", "TRENT.NS", "TVSMOTOR.NS", "UBL.NS", "ULTRACETECH.NS", "UNIONBANK.NS", 
     "UPL.NS", "VEDL.NS", "VOLTAS.NS", "WIPRO.NS", "ZEEL.NS", "ZYDUSLIFE.NS"
 ]
 
 TIMEFRAME = "15m"
-DAYS_LOOKBACK = 2
 SENT_SIGNALS_FILE = "sent_signals.json"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -71,27 +70,23 @@ def calculate_strategy(df):
     price_bbl, price_mult, rsi_len = 20, 2.0, 14
     slPct, tpPct = 1.5, 3.0
 
-    # 1. Price BB (ddof=1 matches ta.stdev in Pine Script)
     df['p_mid'] = df['Close'].rolling(price_bbl).mean()
     df['p_std'] = df['Close'].rolling(price_bbl).std(ddof=1)
     df['p_upper'] = df['p_mid'] + price_mult * df['p_std']
     df['p_lower'] = df['p_mid'] - price_mult * df['p_std']
 
-    # 2. RSI (Wilder's RMA)
     delta = df['Close'].diff()
     gain = delta.where(delta > 0, 0.0).ewm(alpha=1/rsi_len, adjust=False).mean()
     loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/rsi_len, adjust=False).mean()
     rs = gain / loss
     df['RSI'] = 100.0 - (100.0 / (1.0 + rs))
 
-    # 3. VIX Fix Bottom (BUY Panic) - ddof=1
     highest_close = df['Close'].rolling(pd_val).max()
     df['wvf_buy'] = ((highest_close - df['Low']) / highest_close) * 100.0
     df['wvf_buy_upper'] = df['wvf_buy'].rolling(bbl).mean() + mult * df['wvf_buy'].rolling(bbl).std(ddof=1)
     df['wvf_buy_high'] = df['wvf_buy'].rolling(lb).max() * ph
     df['is_buy_panic'] = (df['wvf_buy'] >= df['wvf_buy_upper']) & (df['wvf_buy'] >= df['wvf_buy_high'])
 
-    # 4. VIX Fix Top (SELL Euphoria) - ddof=1
     lowest_close = df['Close'].rolling(pd_val).min()
     df['wvf_sell'] = ((df['High'] - lowest_close) / lowest_close) * 100.0
     df['wvf_sell_upper'] = df['wvf_sell'].rolling(bbl).mean() + mult * df['wvf_sell'].rolling(bbl).std(ddof=1)
@@ -245,14 +240,13 @@ def main():
 
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.now(ist)
-    cutoff_time = now - timedelta(days=DAYS_LOOKBACK)
 
     for symbol in STOCKS:
         clean_symbol = symbol.replace(".NS", "").replace("-", "")
         print(f"Scanning {clean_symbol}...")
 
         try:
-            df = yf.download(symbol, period="7d", interval=TIMEFRAME, progress=False)
+            df = yf.download(symbol, period="5d", interval=TIMEFRAME, progress=False)
             if df.empty or len(df) < 60:
                 continue
 
@@ -260,16 +254,24 @@ def main():
                 df.columns = df.columns.get_level_values(0)
 
             df.index = df.index.tz_convert(ist)
+
+            # RULE 1: Remove currently active/unclosed candle
+            # (Jo candle abhi chal rahi hai use hata do, sirf poori hui candles hi rahengi)
+            df = df[df.index + pd.Timedelta(minutes=15) <= now]
+
+            if df.empty:
+                continue
+
+            latest_closed_candle_time = df.index[-1]
             signals = calculate_strategy(df)
 
+            # RULE 2: Strictly filter signals generated on the VERY LAST CLOSED CANDLE only
             for sig in signals:
-                sig_time = sig['timestamp']
-
-                if sig_time >= cutoff_time:
-                    sig_id = f"{clean_symbol}_{sig['type']}_{sig_time.strftime('%Y%m%d_%H%M')}"
+                if sig['timestamp'] == latest_closed_candle_time:
+                    sig_id = f"{clean_symbol}_{sig['type']}_{sig['timestamp'].strftime('%Y%m%d_%H%M')}"
 
                     if sig_id not in sent_signals:
-                        time_str = sig_time.strftime("%I:%M %p")
+                        time_str = sig['timestamp'].strftime("%I:%M %p")
 
                         if sig['type'] == 'BUY':
                             msg = (
@@ -290,7 +292,7 @@ def main():
                                 f"<b>Chart Candle:</b> 📊 {time_str}"
                             )
 
-                        print(f"Sending signal for {clean_symbol}...")
+                        print(f"Sending fresh candle signal for {clean_symbol}...")
                         if send_telegram_message(msg):
                             sent_signals.append(sig_id)
                             new_signals_count += 1
