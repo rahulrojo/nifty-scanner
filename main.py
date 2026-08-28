@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import pytz
 
 # ==========================================
-# 1. NSE F&O STOCKS LIST
+# 1. CLEAN NSE F&O STOCKS LIST
 # ==========================================
 STOCKS = [
     "AARTIIND.NS", "ABB.NS", "ABBOTINDIA.NS", "ABCAPITAL.NS", "ABFRL.NS", "ACC.NS", 
@@ -49,14 +49,23 @@ SENT_SIGNALS_FILE = "sent_signals.json"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
+# Load past execution state
+sent_ids = []
+last_run_time = None
+
 if os.path.exists(SENT_SIGNALS_FILE):
     try:
         with open(SENT_SIGNALS_FILE, "r") as f:
-            sent_signals = json.load(f)
-    except Exception:
-        sent_signals = []
-else:
-    sent_signals = []
+            data = json.load(f)
+            if isinstance(data, dict):
+                sent_ids = data.get("sent_ids", [])
+                last_run_str = data.get("last_run_time", None)
+                if last_run_str:
+                    last_run_time = datetime.fromisoformat(last_run_str)
+            elif isinstance(data, list):
+                sent_ids = data
+    except Exception as e:
+        print(f"Error loading state file: {e}")
 
 # ==========================================
 # 2. EXACT TRADINGVIEW MATCHED STRATEGY
@@ -235,11 +244,14 @@ def send_telegram_message(text):
     return res.status_code == 200
 
 def main():
-    global sent_signals
+    global sent_ids, last_run_time
     new_signals_count = 0
 
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.now(ist)
+
+    # If first execution ever, default filter start to last 24 hours
+    filter_start_time = last_run_time if last_run_time is not None else (now - timedelta(hours=24))
 
     for symbol in STOCKS:
         clean_symbol = symbol.replace(".NS", "").replace("-", "")
@@ -255,23 +267,24 @@ def main():
 
             df.index = df.index.tz_convert(ist)
 
-            # RULE 1: Remove currently active/unclosed candle
-            # (Jo candle abhi chal rahi hai use hata do, sirf poori hui candles hi rahengi)
-            df = df[df.index + pd.Timedelta(minutes=15) <= now]
+            # Exclude live running candle (only process completed 15m candles)
+            df_closed = df[df.index + pd.Timedelta(minutes=15) <= now]
 
-            if df.empty:
+            if df_closed.empty:
                 continue
 
-            latest_closed_candle_time = df.index[-1]
-            signals = calculate_strategy(df)
+            signals = calculate_strategy(df_closed)
 
-            # RULE 2: Strictly filter signals generated on the VERY LAST CLOSED CANDLE only
             for sig in signals:
-                if sig['timestamp'] == latest_closed_candle_time:
-                    sig_id = f"{clean_symbol}_{sig['type']}_{sig['timestamp'].strftime('%Y%m%d_%H%M')}"
+                sig_start_time = sig['timestamp']
+                sig_close_time = sig_start_time + pd.Timedelta(minutes=15)
 
-                    if sig_id not in sent_signals:
-                        time_str = sig['timestamp'].strftime("%I:%M %p")
+                # Send ONLY signals that completed AFTER the previous scanner run
+                if sig_close_time > filter_start_time:
+                    sig_id = f"{clean_symbol}_{sig['type']}_{sig_start_time.strftime('%Y%m%d_%H%M')}"
+
+                    if sig_id not in sent_ids:
+                        time_str = sig_start_time.strftime("%I:%M %p")
 
                         if sig['type'] == 'BUY':
                             msg = (
@@ -292,16 +305,21 @@ def main():
                                 f"<b>Chart Candle:</b> 📊 {time_str}"
                             )
 
-                        print(f"Sending fresh candle signal for {clean_symbol}...")
+                        print(f"Sending signal for {clean_symbol} ({time_str})...")
                         if send_telegram_message(msg):
-                            sent_signals.append(sig_id)
+                            sent_ids.append(sig_id)
                             new_signals_count += 1
 
         except Exception as e:
             print(f"Error scanning {symbol}: {e}")
 
+    # Update state file with current run timestamp and sent IDs list
+    save_data = {
+        "last_run_time": now.isoformat(),
+        "sent_ids": sent_ids
+    }
     with open(SENT_SIGNALS_FILE, "w") as f:
-        json.dump(sent_signals, f, indent=4)
+        json.dump(save_data, f, indent=4)
 
     print(f"Scan complete. New signals sent: {new_signals_count}")
 
