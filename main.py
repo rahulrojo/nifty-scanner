@@ -50,7 +50,6 @@ SENT_SIGNALS_FILE = "sent_signals.json"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Load existing sent signals to prevent duplicates
 if os.path.exists(SENT_SIGNALS_FILE):
     try:
         with open(SENT_SIGNALS_FILE, "r") as f:
@@ -61,53 +60,58 @@ else:
     sent_signals = []
 
 # ==========================================
-# 2. PINE SCRIPT STRATEGY LOGIC
+# 2. EXACT TRADINGVIEW MATCHED STRATEGY
 # ==========================================
 def calculate_strategy(df):
-    if len(df) < 100:
+    if len(df) < 60:
         return []
 
-    # Parameters from Pine Script
     left, right = 5, 5
     pd_val, bbl, mult, lb, ph = 22, 20, 2.0, 50, 0.90
     price_bbl, price_mult, rsi_len = 20, 2.0, 14
-    slPct = 1.5
+    slPct, tpPct = 1.5, 3.0
 
-    # 1. RSI (RMA Method like TradingView)
-    delta = df['Close'].diff()
-    gain = delta.where(delta > 0, 0).ewm(alpha=1/rsi_len, adjust=False).mean()
-    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/rsi_len, adjust=False).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-
-    # 2. Price Bollinger Bands
+    # 1. Price BB (ddof=1 matches ta.stdev in Pine Script)
     df['p_mid'] = df['Close'].rolling(price_bbl).mean()
-    df['p_std'] = df['Close'].rolling(price_bbl).std(ddof=0)
+    df['p_std'] = df['Close'].rolling(price_bbl).std(ddof=1)
     df['p_upper'] = df['p_mid'] + price_mult * df['p_std']
     df['p_lower'] = df['p_mid'] - price_mult * df['p_std']
 
-    # 3. VIX Mix Logic
+    # 2. RSI (Wilder's RMA)
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0.0).ewm(alpha=1/rsi_len, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/rsi_len, adjust=False).mean()
+    rs = gain / loss
+    df['RSI'] = 100.0 - (100.0 / (1.0 + rs))
+
+    # 3. VIX Fix Bottom (BUY Panic) - ddof=1
     highest_close = df['Close'].rolling(pd_val).max()
-    df['wvf_buy'] = ((highest_close - df['Low']) / highest_close) * 100
-    df['wvf_buy_upper'] = df['wvf_buy'].rolling(bbl).mean() + mult * df['wvf_buy'].rolling(bbl).std(ddof=0)
+    df['wvf_buy'] = ((highest_close - df['Low']) / highest_close) * 100.0
+    df['wvf_buy_upper'] = df['wvf_buy'].rolling(bbl).mean() + mult * df['wvf_buy'].rolling(bbl).std(ddof=1)
     df['wvf_buy_high'] = df['wvf_buy'].rolling(lb).max() * ph
     df['is_buy_panic'] = (df['wvf_buy'] >= df['wvf_buy_upper']) & (df['wvf_buy'] >= df['wvf_buy_high'])
 
+    # 4. VIX Fix Top (SELL Euphoria) - ddof=1
     lowest_close = df['Close'].rolling(pd_val).min()
-    df['wvf_sell'] = ((df['High'] - lowest_close) / lowest_close) * 100
-    df['wvf_sell_upper'] = df['wvf_sell'].rolling(bbl).mean() + mult * df['wvf_sell'].rolling(bbl).std(ddof=0)
+    df['wvf_sell'] = ((df['High'] - lowest_close) / lowest_close) * 100.0
+    df['wvf_sell_upper'] = df['wvf_sell'].rolling(bbl).mean() + mult * df['wvf_sell'].rolling(bbl).std(ddof=1)
     df['wvf_sell_high'] = df['wvf_sell'].rolling(lb).max() * ph
     df['is_sell_euphoria'] = (df['wvf_sell'] >= df['wvf_sell_upper']) & (df['wvf_sell'] >= df['wvf_sell_high'])
 
-    # Active condition in last 5 bars
-    df['vix_buy_active'] = df['is_buy_panic'].rolling(6).max() > 0
-    df['vix_sell_active'] = df['is_sell_euphoria'].rolling(6).max() > 0
+    df['vix_buy_active'] = df['is_buy_panic'].astype(int).rolling(6).max() > 0
+    df['vix_sell_active'] = df['is_sell_euphoria'].astype(int).rolling(6).max() > 0
 
-    # 4. Pivots Structure Logic
     lows = df['Low'].values
     highs = df['High'].values
-    n = len(df)
+    closes = df['Close'].values
+    opens = df['Open'].values
+    p_lowers = df['p_lower'].values
+    p_uppers = df['p_upper'].values
+    rsis = df['RSI'].values
+    vix_b_actives = df['vix_buy_active'].values
+    vix_s_actives = df['vix_sell_active'].values
 
+    n = len(df)
     p_low = np.full(n, np.nan)
     p_high = np.full(n, np.nan)
 
@@ -117,22 +121,31 @@ def calculate_strategy(df):
         if highs[i] == np.max(highs[i - left : i + right + 1]):
             p_high[i + right] = highs[i]
 
-    df['pivotLow'] = p_low
-    df['pivotHigh'] = p_high
-
-    # Signal Engine Simulation
-    lastLow1, lastLow2 = np.nan, np.nan
-    lastHigh1, lastHigh2 = np.nan, np.nan
-    resistance, support = np.nan, np.nan
+    lastLow1, lastLow2 = None, None
+    lastHigh1, lastHigh2 = None, None
+    resistance, support = None, None
 
     longTriggered = False
     shortTriggered = False
+    position = 0
+    sl_price, tp_price = 0.0, 0.0
 
     signals = []
 
     for i in range(n):
-        pl = df['pivotLow'].iloc[i]
-        ph_val = df['pivotHigh'].iloc[i]
+        if position == 1:
+            if lows[i] <= sl_price or highs[i] >= tp_price:
+                position = 0
+                longTriggered = False
+                shortTriggered = False
+        elif position == -1:
+            if highs[i] >= sl_price or lows[i] <= tp_price:
+                position = 0
+                longTriggered = False
+                shortTriggered = False
+
+        pl = p_low[i]
+        ph_val = p_high[i]
 
         if not np.isnan(pl):
             lastLow2 = lastLow1
@@ -144,53 +157,65 @@ def calculate_strategy(df):
             lastHigh1 = ph_val
             resistance = ph_val
 
-        validLows = not np.isnan(lastLow1) and not np.isnan(lastLow2)
-        validHighs = not np.isnan(lastHigh1) and not np.isnan(lastHigh2)
+        validLows = (lastLow1 is not None) and (lastLow2 is not None)
+        validHighs = (lastHigh1 is not None) and (lastHigh2 is not None)
 
         isHL = validLows and (lastLow1 > lastLow2)
         isLH = validHighs and (lastHigh1 < lastHigh2)
 
-        close = df['Close'].iloc[i]
-        open_p = df['Open'].iloc[i]
-        p_low_b = df['p_lower'].iloc[i]
-        p_high_b = df['p_upper'].iloc[i]
-        rsi = df['RSI'].iloc[i]
+        c = closes[i]
+        o = opens[i]
+        p_low_b = p_lowers[i]
+        p_high_b = p_uppers[i]
+        rsi = rsis[i]
 
-        vix_b_active = df['vix_buy_active'].iloc[i]
-        vix_s_active = df['vix_sell_active'].iloc[i]
+        vix_b_active = vix_b_actives[i]
+        vix_s_active = vix_s_actives[i]
 
-        prev_close = df['Close'].iloc[i-1] if i > 0 else np.nan
-        prev_p_lower = df['p_lower'].iloc[i-1] if i > 0 else np.nan
-        prev_p_upper = df['p_upper'].iloc[i-1] if i > 0 else np.nan
+        prev_c = closes[i-1] if i > 0 else np.nan
+        prev_p_lower = p_lowers[i-1] if i > 0 else np.nan
+        prev_p_upper = p_uppers[i-1] if i > 0 else np.nan
 
-        crossover_lower = (prev_close <= prev_p_lower) and (close > p_low_b)
-        crossunder_upper = (prev_close >= prev_p_upper) and (close < p_high_b)
+        crossover_lower = (prev_c < prev_p_lower) and (c > p_low_b)
+        crossunder_upper = (prev_c > prev_p_upper) and (c < p_high_b)
 
-        longCondition = vix_b_active and isHL and (close > resistance or crossover_lower) and (close > open_p) and (rsi < 50)
-        shortCondition = vix_s_active and isLH and (close < support or crossunder_upper) and (close < open_p) and (rsi > 50)
+        res_cond = (resistance is not None) and (c > resistance)
+        sup_cond = (support is not None) and (c < support)
+
+        longCondition = vix_b_active and isHL and (res_cond or crossover_lower) and (c > o) and (rsi < 50)
+        shortCondition = vix_s_active and isLH and (sup_cond or crossunder_upper) and (c < o) and (rsi > 50)
 
         longSignal = longCondition and not longTriggered
         shortSignal = shortCondition and not shortTriggered
 
         if longSignal:
+            position = 1
+            entry_p = round(c, 2)
+            sl_price = round(entry_p * (1 - slPct / 100), 2)
+            tp_price = round(entry_p * (1 + tpPct / 100), 2)
             longTriggered = True
             shortTriggered = False
-            sl_price = round(close * (1 - slPct / 100), 2)
+
             signals.append({
                 'type': 'BUY',
                 'timestamp': df.index[i],
-                'price': round(close, 2),
+                'price': entry_p,
                 'sl': sl_price,
                 'rsi': round(rsi, 1)
             })
+
         elif shortSignal:
+            position = -1
+            entry_p = round(c, 2)
+            sl_price = round(entry_p * (1 + slPct / 100), 2)
+            tp_price = round(entry_p * (1 - tpPct / 100), 2)
             shortTriggered = True
             longTriggered = False
-            sl_price = round(close * (1 + slPct / 100), 2)
+
             signals.append({
                 'type': 'SELL',
                 'timestamp': df.index[i],
-                'price': round(close, 2),
+                'price': entry_p,
                 'sl': sl_price,
                 'rsi': round(rsi, 1)
             })
@@ -198,7 +223,7 @@ def calculate_strategy(df):
     return signals
 
 # ==========================================
-# 3. TELEGRAM SENDER & SCANNER ENGINE
+# 3. TELEGRAM SENDER ENGINE
 # ==========================================
 def send_telegram_message(text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -223,12 +248,12 @@ def main():
     cutoff_time = now - timedelta(days=DAYS_LOOKBACK)
 
     for symbol in STOCKS:
-        clean_symbol = symbol.replace(".NS", "")
+        clean_symbol = symbol.replace(".NS", "").replace("-", "")
         print(f"Scanning {clean_symbol}...")
 
         try:
-            df = yf.download(symbol, period="5d", interval=TIMEFRAME, progress=False)
-            if df.empty:
+            df = yf.download(symbol, period="7d", interval=TIMEFRAME, progress=False)
+            if df.empty or len(df) < 60:
                 continue
 
             if isinstance(df.columns, pd.MultiIndex):
