@@ -10,7 +10,6 @@ import pytz
 # ==========================================
 # 1. INDEXES & NSE F&O STOCKS LIST
 # ==========================================
-# Yahoo Finance Symbols for Major Indian Indexes & Stocks
 INDEX_MAP = {
     "^NSEI": "NIFTY",
     "^NSEBANK": "BANKNIFTY",
@@ -266,7 +265,6 @@ def main():
     filter_start_time = last_run_time if last_run_time is not None else (now - timedelta(hours=24))
 
     for symbol in STOCKS:
-        # Get user-friendly name for Indexes or Stocks
         clean_symbol = INDEX_MAP.get(symbol, symbol.replace(".NS", "").replace("-", ""))
         print(f"Scanning {clean_symbol}...")
 
@@ -292,13 +290,11 @@ def main():
                 sig_start_time = sig['timestamp']
                 sig_close_time = sig_start_time + pd.Timedelta(minutes=15)
 
-                # Send ONLY signals that completed AFTER the previous scanner run
                 if sig_close_time > filter_start_time:
                     sig_id = f"{clean_symbol}_{sig['type']}_{sig_start_time.strftime('%Y%m%d_%H%M')}"
 
                     if sig_id not in sent_ids:
                         time_str = sig_start_time.strftime("%I:%M %p")
-
                         label_type = "INDEX" if symbol in INDEX_MAP else "STOCK"
 
                         if sig['type'] == 'BUY':
@@ -328,7 +324,16 @@ def main():
         except Exception as e:
             print(f"Error scanning {symbol}: {e}")
 
-    # Update state file with current run timestamp and sent IDs list
+    # Send Execution Status/Confirmation Message to Telegram
+    time_now_str = now.strftime("%I:%M %p")
+    status_msg = (
+        f"🤖 <b>Scanner Execution Status</b>\n\n"
+        f"✅ Scan completed successfully at <b>{time_now_str}</b>\n"
+        f"📊 <b>New Signals Sent:</b> {new_signals_count}"
+    )
+    send_telegram_message(status_msg)
+
+    # Save state file
     save_data = {
         "last_run_time": now.isoformat(),
         "sent_ids": sent_ids
