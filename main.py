@@ -8,9 +8,21 @@ from datetime import datetime, timedelta
 import pytz
 
 # ==========================================
-# 1. CLEAN NSE F&O STOCKS LIST
+# 1. INDEXES & NSE F&O STOCKS LIST
 # ==========================================
+# Yahoo Finance Symbols for Major Indian Indexes & Stocks
+INDEX_MAP = {
+    "^NSEI": "NIFTY",
+    "^NSEBANK": "BANKNIFTY",
+    "^CNXFIN": "FINNIFTY",
+    "^NSEMDCP50": "MIDCPNIFTY"
+}
+
 STOCKS = [
+    # Major Indexes
+    "^NSEI", "^NSEBANK", "^CNXFIN", "^NSEMDCP50",
+    
+    # F&O Stocks
     "AARTIIND.NS", "ABB.NS", "ABBOTINDIA.NS", "ABCAPITAL.NS", "ABFRL.NS", "ACC.NS", 
     "ADANIENT.NS", "ADANIPORTS.NS", "ALKEM.NS", "AMBUJACEMENT.NS", "APOLLOHOSP.NS", 
     "APOLLOTYRE.NS", "ASHOKLEY.NS", "ASIANPAINT.NS", "ASTRAL.NS", "ATUL.NS", "AUBANK.NS", 
@@ -254,7 +266,8 @@ def main():
     filter_start_time = last_run_time if last_run_time is not None else (now - timedelta(hours=24))
 
     for symbol in STOCKS:
-        clean_symbol = symbol.replace(".NS", "").replace("-", "")
+        # Get user-friendly name for Indexes or Stocks
+        clean_symbol = INDEX_MAP.get(symbol, symbol.replace(".NS", "").replace("-", ""))
         print(f"Scanning {clean_symbol}...")
 
         try:
@@ -286,21 +299,23 @@ def main():
                     if sig_id not in sent_ids:
                         time_str = sig_start_time.strftime("%I:%M %p")
 
+                        label_type = "INDEX" if symbol in INDEX_MAP else "STOCK"
+
                         if sig['type'] == 'BUY':
                             msg = (
-                                f"🟢 <b>VIX MIX BALANCED BUY SIGNAL ({TIMEFRAME})</b> 🟢\n\n"
-                                f"<b>Stock:</b> {clean_symbol}\n"
-                                f"<b>Price:</b> ₹{sig['price']}\n"
-                                f"<b>StopLoss Zone:</b> ₹{sig['sl']}\n"
+                                f"🟢 <b>VIX MIX BUY SIGNAL ({TIMEFRAME})</b> 🟢\n\n"
+                                f"<b>{label_type}:</b> {clean_symbol}\n"
+                                f"<b>Price:</b> {sig['price']}\n"
+                                f"<b>StopLoss Zone:</b> {sig['sl']}\n"
                                 f"<b>RSI:</b> {sig['rsi']}\n"
                                 f"<b>Chart Candle:</b> 📊 {time_str}"
                             )
                         else:
                             msg = (
-                                f"🔴 <b>VIX MIX BALANCED SELL SIGNAL ({TIMEFRAME})</b> 🔴\n\n"
-                                f"<b>Stock:</b> {clean_symbol}\n"
-                                f"<b>Price:</b> ₹{sig['price']}\n"
-                                f"<b>StopLoss Zone:</b> ₹{sig['sl']}\n"
+                                f"🔴 <b>VIX MIX SELL SIGNAL ({TIMEFRAME})</b> 🔴\n\n"
+                                f"<b>{label_type}:</b> {clean_symbol}\n"
+                                f"<b>Price:</b> {sig['price']}\n"
+                                f"<b>StopLoss Zone:</b> {sig['sl']}\n"
                                 f"<b>RSI:</b> {sig['rsi']}\n"
                                 f"<b>Chart Candle:</b> 📊 {time_str}"
                             )
