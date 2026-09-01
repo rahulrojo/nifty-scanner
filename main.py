@@ -40,13 +40,13 @@ FNO_STOCKS = [
 
 def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram Credentials Missing!")
+        print("Telegram configuration missing!")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     try:
         r = requests.post(url, json=payload, timeout=10)
-        print(f"Telegram Post Status: {r.status_code}")
+        print(f"Telegram sent status: {r.status_code}")
     except Exception as e:
         print(f"Telegram error: {e}")
 
@@ -108,16 +108,10 @@ def process_strategy_exact_pine(df, left=5, right=5):
         if is_ph:
             pivot_highs[i + right] = c_high
 
-    lastLow1 = None
-    lastLow2 = None
-    lastHigh1 = None
-    lastHigh2 = None
-
-    resistance = None
-    support = None
-
-    longTriggered = False
-    shortTriggered = False
+    lastLow1, lastLow2 = None, None
+    lastHigh1, lastHigh2 = None, None
+    resistance, support = None, None
+    longTriggered, shortTriggered = False, False
 
     signals = []
 
@@ -188,7 +182,7 @@ def run_scanner():
 
                 candle_day = candle_time.strftime("%Y-%m-%d")
 
-                # Sirf Aaj ki Date ke Signals trigger hone chahiye
+                # Match signal day with IST today
                 if candle_day == today_str:
                     signal_key = f"{symbol}_{sig_type}_{candle_time.strftime('%Y%m%d_%H%M')}"
 
@@ -208,11 +202,12 @@ def run_scanner():
 
                         send_telegram(msg)
                         sent_count += 1
+                        print(f"SIGNAL SENT: {clean_symbol} {sig_type} at {time_str}")
         except Exception as e:
             print(f"Error processing {symbol}: {e}")
             continue
 
-    print(f"Process complete. Total signals sent today: {sent_count}")
+    print(f"Scan complete. Total signals sent: {sent_count}")
     save_signaled_history(signaled_history)
 
 if __name__ == "__main__":
