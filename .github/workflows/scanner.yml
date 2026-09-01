@@ -2,7 +2,6 @@ name: Stock Scanner
 
 on:
   schedule:
-    # Har 15-minute candle close hone ke 1 min baad chalega (IST: 9:31, 9:46, 10:01...)
     - cron: '1,16,31,46 * * * 1-5'
   workflow_dispatch:
 
@@ -26,7 +25,7 @@ jobs:
 
       - name: Run Main Scanner Script
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python main.py
 
