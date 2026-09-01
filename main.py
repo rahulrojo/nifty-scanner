@@ -40,13 +40,11 @@ FNO_STOCKS = [
 
 def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram Credentials missing!")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     try:
-        r = requests.post(url, json=payload, timeout=10)
-        print(f"Telegram status: {r.status_code}")
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"Telegram error: {e}")
 
@@ -66,102 +64,64 @@ def save_signaled_history(history):
     except Exception as e:
         print(f"History Save Error: {e}")
 
-def process_strategy_exact_pine(df, left=5, right=5):
+def check_latest_candle_breakout(df, left=5, right=5):
     n = len(df)
     if n < (left + right + 10):
-        return []
+        return None
 
-    highs = df['High'].values
     lows = df['Low'].values
+    highs = df['High'].values
     closes = df['Close'].values
-    times = df.index
 
-    pivot_lows = [None] * n
-    pivot_highs = [None] * n
-
-    for i in range(left, n - right):
-        c_low = lows[i]
-        is_pl = True
-        for k in range(i - left, i):
-            if lows[k] <= c_low:
-                is_pl = False
-                break
-        if is_pl:
-            for k in range(i + 1, i + right + 1):
-                if lows[k] <= c_low:
-                    is_pl = False
-                    break
-        if is_pl:
-            pivot_lows[i + right] = c_low
-
-        c_high = highs[i]
-        is_ph = True
-        for k in range(i - left, i):
-            if highs[k] >= c_high:
-                is_ph = False
-                break
-        if is_ph:
-            for k in range(i + 1, i + right + 1):
-                if highs[k] >= c_high:
-                    is_ph = False
-                    break
-        if is_ph:
-            pivot_highs[i + right] = c_high
-
+    # 1. Calculate Pivots across historical bars
     lastLow1, lastLow2 = None, None
     lastHigh1, lastHigh2 = None, None
     resistance, support = None, None
-    longTriggered, shortTriggered = False, False
 
-    signals = []
-
-    for i in range(n):
-        pl = pivot_lows[i]
-        ph = pivot_highs[i]
-
-        if pl is not None:
+    for i in range(left, n - right - 1):
+        # Pivot Low Check
+        c_low = lows[i]
+        if all(c_low < lows[i-left:i]) and all(c_low < lows[i+1:i+right+1]):
             lastLow2 = lastLow1
-            lastLow1 = pl
-            support = pl
+            lastLow1 = c_low
+            support = c_low
 
-        if ph is not None:
+        # Pivot High Check
+        c_high = highs[i]
+        if all(c_high > highs[i-left:i]) and all(c_high > highs[i+1:i+right+1]):
             lastHigh2 = lastHigh1
-            lastHigh1 = ph
-            resistance = ph
+            lastHigh1 = c_high
+            resistance = c_high
 
-        validLows = (lastLow1 is not None) and (lastLow2 is not None)
-        validHighs = (lastHigh1 is not None) and (lastHigh2 is not None)
+    # Validations
+    validLows = (lastLow1 is not None) and (lastLow2 is not None)
+    validHighs = (lastHigh1 is not None) and (lastHigh2 is not None)
 
-        isHL = validLows and (lastLow1 > lastLow2)
-        isLH = validHighs and (lastHigh1 < lastHigh2)
+    isHL = validLows and (lastLow1 > lastLow2)
+    isLH = validHighs and (lastHigh1 < lastHigh2)
 
-        close_price = closes[i]
+    # Check ONLY the last completed candle
+    last_idx = -1
+    last_close = closes[last_idx]
+    last_time = df.index[last_idx]
 
-        longSignal = isHL and (resistance is not None) and (close_price > resistance) and not longTriggered
-        shortSignal = isLH and (support is not None) and (close_price < support) and not shortTriggered
+    longSignal = isHL and (resistance is not None) and (last_close > resistance)
+    shortSignal = isLH and (support is not None) and (last_close < support)
 
-        if longSignal:
-            longTriggered = True
-            shortTriggered = False
-            signals.append(("LONG", close_price, times[i]))
+    if longSignal:
+        return ("LONG", last_close, last_time)
+    elif shortSignal:
+        return ("SHORT", last_close, last_time)
 
-        if shortSignal:
-            shortTriggered = True
-            longTriggered = False
-            signals.append(("SHORT", close_price, times[i]))
-
-    return signals
+    return None
 
 def run_scanner():
     ist = pytz.timezone('Asia/Kolkata')
     now_ist = datetime.now(ist)
-    cutoff_time = now_ist - timedelta(days=2) # 2 days buffer
-
     signaled_history = load_signaled_history()
 
     try:
-        # Download data cleanly
-        data = yf.download(FNO_STOCKS, period="10d", interval="15m", progress=False)
+        data = yf.download(FNO_STOCKS, period="5d", interval="15m", progress=False)
     except Exception as e:
         print(f"Data Fetch Error: {e}")
         return
@@ -169,7 +129,6 @@ def run_scanner():
     sent_count = 0
     for symbol in FNO_STOCKS:
         try:
-            # Fix multi-index dataframe Extraction
             if isinstance(data.columns, pd.MultiIndex):
                 if symbol not in data['Close'].columns:
                     continue
@@ -182,18 +141,20 @@ def run_scanner():
             else:
                 df = data.dropna().copy()
 
-            if df.empty or len(df) < 30:
+            if df.empty or len(df) < 20:
                 continue
 
-            signals = process_strategy_exact_pine(df)
+            res = check_latest_candle_breakout(df)
+            if res is not None:
+                sig_type, price, candle_time = res
 
-            for sig_type, price, candle_time in signals:
                 if candle_time.tzinfo is None:
                     candle_time = ist.localize(candle_time)
                 else:
                     candle_time = candle_time.astimezone(ist)
 
-                if candle_time >= cutoff_time:
+                # Sirf pichle 30 minutes ke andar waale LIVE signal trigger honge
+                if (now_ist - candle_time) <= timedelta(minutes=30):
                     signal_key = f"{symbol}_{sig_type}_{candle_time.strftime('%Y%m%d_%H%M')}"
 
                     if signal_key not in signaled_history:
@@ -212,12 +173,11 @@ def run_scanner():
 
                         send_telegram(msg)
                         sent_count += 1
-                        print(f"SENT: {clean_symbol} {sig_type} at {time_str}")
+                        print(f"LIVE SIGNAL: {clean_symbol} {sig_type} at {time_str}")
         except Exception as e:
-            print(f"Error processing {symbol}: {e}")
             continue
 
-    print(f"Scan Finished. Total Signals Sent: {sent_count}")
+    print(f"Scan Done. Live Signals Sent: {sent_count}")
     save_signaled_history(signaled_history)
 
 if __name__ == "__main__":
