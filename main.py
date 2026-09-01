@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -40,13 +40,13 @@ FNO_STOCKS = [
 
 def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram configuration missing!")
+        print("Telegram Credentials missing!")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     try:
         r = requests.post(url, json=payload, timeout=10)
-        print(f"Telegram sent status: {r.status_code}")
+        print(f"Telegram status: {r.status_code}")
     except Exception as e:
         print(f"Telegram error: {e}")
 
@@ -155,12 +155,12 @@ def process_strategy_exact_pine(df, left=5, right=5):
 def run_scanner():
     ist = pytz.timezone('Asia/Kolkata')
     now_ist = datetime.now(ist)
-    today_str = now_ist.strftime("%Y-%m-%d")
+    cutoff_time = now_ist - timedelta(hours=24) # Allow recent 24h signals
 
     signaled_history = load_signaled_history()
 
     try:
-        data = yf.download(FNO_STOCKS, period="30d", interval="15m", group_by='ticker', threads=True, progress=False)
+        data = yf.download(FNO_STOCKS, period="10d", interval="15m", group_by='ticker', threads=True, progress=False)
     except Exception as e:
         print(f"Data Fetch Error: {e}")
         return
@@ -180,10 +180,8 @@ def run_scanner():
                 else:
                     candle_time = candle_time.astimezone(ist)
 
-                candle_day = candle_time.strftime("%Y-%m-%d")
-
-                # Match signal day with IST today
-                if candle_day == today_str:
+                # Process if signal happened within the last 24 hours
+                if candle_time >= cutoff_time:
                     signal_key = f"{symbol}_{sig_type}_{candle_time.strftime('%Y%m%d_%H%M')}"
 
                     if signal_key not in signaled_history:
@@ -202,12 +200,12 @@ def run_scanner():
 
                         send_telegram(msg)
                         sent_count += 1
-                        print(f"SIGNAL SENT: {clean_symbol} {sig_type} at {time_str}")
+                        print(f"SENT: {clean_symbol} {sig_type} at {time_str}")
         except Exception as e:
             print(f"Error processing {symbol}: {e}")
             continue
 
-    print(f"Scan complete. Total signals sent: {sent_count}")
+    print(f"Completed. Signals sent in this run: {sent_count}")
     save_signaled_history(signaled_history)
 
 if __name__ == "__main__":
