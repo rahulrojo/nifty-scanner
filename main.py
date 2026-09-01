@@ -155,12 +155,13 @@ def process_strategy_exact_pine(df, left=5, right=5):
 def run_scanner():
     ist = pytz.timezone('Asia/Kolkata')
     now_ist = datetime.now(ist)
-    cutoff_time = now_ist - timedelta(hours=24) # Allow recent 24h signals
+    cutoff_time = now_ist - timedelta(days=2) # 2 days buffer
 
     signaled_history = load_signaled_history()
 
     try:
-        data = yf.download(FNO_STOCKS, period="10d", interval="15m", group_by='ticker', threads=True, progress=False)
+        # Download data cleanly
+        data = yf.download(FNO_STOCKS, period="10d", interval="15m", progress=False)
     except Exception as e:
         print(f"Data Fetch Error: {e}")
         return
@@ -168,8 +169,20 @@ def run_scanner():
     sent_count = 0
     for symbol in FNO_STOCKS:
         try:
-            df = data[symbol].dropna().copy() if symbol in data else None
-            if df is None or df.empty or len(df) < 30:
+            # Fix multi-index dataframe Extraction
+            if isinstance(data.columns, pd.MultiIndex):
+                if symbol not in data['Close'].columns:
+                    continue
+                df = pd.DataFrame({
+                    'Open': data['Open'][symbol],
+                    'High': data['High'][symbol],
+                    'Low': data['Low'][symbol],
+                    'Close': data['Close'][symbol]
+                }).dropna()
+            else:
+                df = data.dropna().copy()
+
+            if df.empty or len(df) < 30:
                 continue
 
             signals = process_strategy_exact_pine(df)
@@ -180,7 +193,6 @@ def run_scanner():
                 else:
                     candle_time = candle_time.astimezone(ist)
 
-                # Process if signal happened within the last 24 hours
                 if candle_time >= cutoff_time:
                     signal_key = f"{symbol}_{sig_type}_{candle_time.strftime('%Y%m%d_%H%M')}"
 
@@ -205,7 +217,7 @@ def run_scanner():
             print(f"Error processing {symbol}: {e}")
             continue
 
-    print(f"Completed. Signals sent in this run: {sent_count}")
+    print(f"Scan Finished. Total Signals Sent: {sent_count}")
     save_signaled_history(signaled_history)
 
 if __name__ == "__main__":
