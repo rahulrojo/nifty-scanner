@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime, time
 import pytz
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -73,51 +73,66 @@ def check_latest_candle_breakout(df, left=5, right=5):
     highs = df['High'].values
     closes = df['Close'].values
 
-    # 1. Calculate Pivots across historical bars
     lastLow1, lastLow2 = None, None
     lastHigh1, lastHigh2 = None, None
     resistance, support = None, None
 
     for i in range(left, n - right - 1):
-        # Pivot Low Check
         c_low = lows[i]
         if all(c_low < lows[i-left:i]) and all(c_low < lows[i+1:i+right+1]):
             lastLow2 = lastLow1
             lastLow1 = c_low
             support = c_low
 
-        # Pivot High Check
         c_high = highs[i]
         if all(c_high > highs[i-left:i]) and all(c_high > highs[i+1:i+right+1]):
             lastHigh2 = lastHigh1
             lastHigh1 = c_high
             resistance = c_high
 
-    # Validations
     validLows = (lastLow1 is not None) and (lastLow2 is not None)
     validHighs = (lastHigh1 is not None) and (lastHigh2 is not None)
 
     isHL = validLows and (lastLow1 > lastLow2)
     isLH = validHighs and (lastHigh1 < lastHigh2)
 
-    # Check ONLY the last completed candle
     last_idx = -1
     last_close = closes[last_idx]
     last_time = df.index[last_idx]
+    last_support = support if support is not None else lows[last_idx]
+    last_resistance = resistance if resistance is not None else highs[last_idx]
 
     longSignal = isHL and (resistance is not None) and (last_close > resistance)
     shortSignal = isLH and (support is not None) and (last_close < support)
 
     if longSignal:
-        return ("LONG", last_close, last_time)
+        # Risk-Reward 1:1.5 setup for SL & Target
+        sl = last_support
+        target = last_close + (last_close - sl) * 1.5
+        return ("LONG", last_close, sl, target, last_time)
     elif shortSignal:
-        return ("SHORT", last_close, last_time)
+        sl = last_resistance
+        target = last_close - (sl - last_close) * 1.5
+        return ("SHORT", last_close, sl, target, last_time)
 
     return None
 
 def run_scanner():
     ist = pytz.timezone('Asia/Kolkata')
     now_ist = datetime.now(ist)
+    current_time = now_ist.time()
+
+    # 1. Market Hours Check (9:15 AM to 3:30 PM IST)
+    market_open = time(9, 15)
+    market_close = time(3, 30)
+
+    if not (market_open <= current_time <= market_close):
+        print(f"Market is closed right now ({current_time}). Scanner skipped.")
+        return
+
+    # 2. Test Message on successful execution during market hours
+    send_telegram("🟢 *Test Message:* Bot is active and running successfully in Market Hours!")
+
     signaled_history = load_signaled_history()
 
     try:
@@ -146,38 +161,38 @@ def run_scanner():
 
             res = check_latest_candle_breakout(df)
             if res is not None:
-                sig_type, price, candle_time = res
+                sig_type, price, sl, target, candle_time = res
 
                 if candle_time.tzinfo is None:
                     candle_time = ist.localize(candle_time)
                 else:
                     candle_time = candle_time.astimezone(ist)
 
-                # Sirf pichle 30 minutes ke andar waale LIVE signal trigger honge
-                if (now_ist - candle_time) <= timedelta(minutes=30):
-                    signal_key = f"{symbol}_{sig_type}_{candle_time.strftime('%Y%m%d_%H%M')}"
+                signal_key = f"{symbol}_{sig_type}_{candle_time.strftime('%Y%m%d_%H%M')}"
 
-                    if signal_key not in signaled_history:
-                        signaled_history.add(signal_key)
+                if signal_key not in signaled_history:
+                    signaled_history.add(signal_key)
 
-                        clean_symbol = symbol.replace(".NS", "").replace("^NSEI", "NIFTY 50").replace("^NSEBANK", "BANKNIFTY")
-                        time_str = candle_time.strftime("%d-%b %H:%M")
+                    clean_symbol = symbol.replace(".NS", "").replace("^NSEI", "NIFTY 50").replace("^NSEBANK", "BANKNIFTY")
+                    time_str = candle_time.strftime("%d-%b %H:%M")
 
-                        emoji = "🟩" if sig_type == "LONG" else "🟥"
-                        msg = (f"{emoji} *PIVOT BREAKOUT SIGNAL*\n\n"
-                               f"*Symbol:* {clean_symbol}\n"
-                               f"*Signal:* {sig_type}\n"
-                               f"*Entry Price:* ₹{price:.2f}\n"
-                               f"*Time:* {time_str}\n"
-                               f"*Timeframe:* 15 Min")
+                    emoji = "🟩" if sig_type == "LONG" else "🟥"
+                    msg = (f"{emoji} *PIVOT BREAKOUT SIGNAL*\n\n"
+                           f"*Symbol:* {clean_symbol}\n"
+                           f"*Signal:* {sig_type}\n"
+                           f"*Entry Price:* ₹{price:.2f}\n"
+                           f"*Stoploss:* ₹{sl:.2f}\n"
+                           f"*Target:* ₹{target:.2f}\n"
+                           f"*Time:* {time_str}\n"
+                           f"*Timeframe:* 15 Min")
 
-                        send_telegram(msg)
-                        sent_count += 1
-                        print(f"LIVE SIGNAL: {clean_symbol} {sig_type} at {time_str}")
+                    send_telegram(msg)
+                    sent_count += 1
+                    print(f"LIVE SIGNAL SENT: {clean_symbol} {sig_type}")
         except Exception as e:
             continue
 
-    print(f"Scan Done. Live Signals Sent: {sent_count}")
+    print(f"Scan Done. Signals Sent: {sent_count}")
     save_signaled_history(signaled_history)
 
 if __name__ == "__main__":
