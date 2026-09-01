@@ -2,9 +2,9 @@ name: Stock Scanner
 
 on:
   schedule:
-    # Har 15-minute candle close hone ke 1 min baad chalega (IST ke hisaab se 9:31, 9:46, 10:01...)
+    # Har 15-minute candle close hone ke 1 min baad chalega (IST: 9:31, 9:46, 10:01...)
     - cron: '1,16,31,46 * * * 1-5'
-  workflow_dispatch: # GitHub se manually run karne ke liye
+  workflow_dispatch:
 
 jobs:
   run-scanner:
@@ -26,7 +26,7 @@ jobs:
 
       - name: Run Main Scanner Script
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python main.py
 
@@ -34,5 +34,5 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add sent_signals.json || true
+          git add signaled_candles.json || true
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update sent signals history" && git push)
