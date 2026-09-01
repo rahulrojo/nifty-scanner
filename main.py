@@ -40,11 +40,13 @@ FNO_STOCKS = [
 
 def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram Secrets (TOKEN/CHAT_ID) Missing in GitHub Settings!")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     try:
-        requests.post(url, json=payload, timeout=10)
+        r = requests.post(url, json=payload, timeout=10)
+        print(f"Telegram Post Status: {r.status_code}")
     except Exception as e:
         print(f"Telegram error: {e}")
 
@@ -106,7 +108,6 @@ def check_latest_candle_breakout(df, left=5, right=5):
     shortSignal = isLH and (support is not None) and (last_close < support)
 
     if longSignal:
-        # Risk-Reward 1:1.5 setup for SL & Target
         sl = last_support
         target = last_close + (last_close - sl) * 1.5
         return ("LONG", last_close, sl, target, last_time)
@@ -118,20 +119,20 @@ def check_latest_candle_breakout(df, left=5, right=5):
     return None
 
 def run_scanner():
+    # 1. Immediate Test Message on Trigger
+    send_telegram("🔔 *Bot Connection Active:* Scanner execution started successfully!")
+
     ist = pytz.timezone('Asia/Kolkata')
     now_ist = datetime.now(ist)
     current_time = now_ist.time()
 
-    # 1. Market Hours Check (9:15 AM to 3:30 PM IST)
+    # 2. Market Hours Check (9:15 AM to 3:30 PM IST)
     market_open = time(9, 15)
     market_close = time(3, 30)
 
     if not (market_open <= current_time <= market_close):
-        print(f"Market is closed right now ({current_time}). Scanner skipped.")
+        print(f"Market is closed ({current_time.strftime('%H:%M IST')}). Stock scanning skipped.")
         return
-
-    # 2. Test Message on successful execution during market hours
-    send_telegram("🟢 *Test Message:* Bot is active and running successfully in Market Hours!")
 
     signaled_history = load_signaled_history()
 
