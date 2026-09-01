@@ -40,11 +40,13 @@ FNO_STOCKS = [
 
 def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram Credentials Missing!")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     try:
-        requests.post(url, json=payload, timeout=10)
+        r = requests.post(url, json=payload, timeout=10)
+        print(f"Telegram Post Status: {r.status_code}")
     except Exception as e:
         print(f"Telegram error: {e}")
 
@@ -74,12 +76,10 @@ def process_strategy_exact_pine(df, left=5, right=5):
     closes = df['Close'].values
     times = df.index
 
-    # Pre-calculate Pivot Lows and Pivot Highs as TradingView ta.pivotlow/ta.pivothigh
     pivot_lows = [None] * n
     pivot_highs = [None] * n
 
     for i in range(left, n - right):
-        # Pivot Low Check
         c_low = lows[i]
         is_pl = True
         for k in range(i - left, i):
@@ -94,7 +94,6 @@ def process_strategy_exact_pine(df, left=5, right=5):
         if is_pl:
             pivot_lows[i + right] = c_low
 
-        # Pivot High Check
         c_high = highs[i]
         is_ph = True
         for k in range(i - left, i):
@@ -109,7 +108,6 @@ def process_strategy_exact_pine(df, left=5, right=5):
         if is_ph:
             pivot_highs[i + right] = c_high
 
-    # Variable emulation of Pine Script (var float / var bool)
     lastLow1 = None
     lastLow2 = None
     lastHigh1 = None
@@ -123,7 +121,6 @@ def process_strategy_exact_pine(df, left=5, right=5):
 
     signals = []
 
-    # Bar-by-bar Simulation exactly matching TradingView Engine
     for i in range(n):
         pl = pivot_lows[i]
         ph = pivot_highs[i]
@@ -169,16 +166,16 @@ def run_scanner():
     signaled_history = load_signaled_history()
 
     try:
-        # 60d period ensures historical pivot memory is completely warm like TradingView
-        data = yf.download(FNO_STOCKS, period="60d", interval="15m", group_by='ticker', threads=True, progress=False)
+        data = yf.download(FNO_STOCKS, period="30d", interval="15m", group_by='ticker', threads=True, progress=False)
     except Exception as e:
         print(f"Data Fetch Error: {e}")
         return
 
+    sent_count = 0
     for symbol in FNO_STOCKS:
         try:
             df = data[symbol].dropna().copy() if symbol in data else None
-            if df is None or df.empty or len(df) < 50:
+            if df is None or df.empty or len(df) < 30:
                 continue
 
             signals = process_strategy_exact_pine(df)
@@ -191,7 +188,7 @@ def run_scanner():
 
                 candle_day = candle_time.strftime("%Y-%m-%d")
 
-                # Filter: Aaj ke din ke bane signals hi Telegram par bhejo
+                # Sirf Aaj ki Date ke Signals trigger hone chahiye
                 if candle_day == today_str:
                     signal_key = f"{symbol}_{sig_type}_{candle_time.strftime('%Y%m%d_%H%M')}"
 
@@ -210,10 +207,12 @@ def run_scanner():
                                f"*Timeframe:* 15 Min")
 
                         send_telegram(msg)
+                        sent_count += 1
         except Exception as e:
             print(f"Error processing {symbol}: {e}")
             continue
 
+    print(f"Process complete. Total signals sent today: {sent_count}")
     save_signaled_history(signaled_history)
 
 if __name__ == "__main__":
