@@ -64,43 +64,76 @@ def save_signaled_history(history):
     except Exception as e:
         print(f"History Save Error: {e}")
 
-def process_strategy(df, left=5, right=5):
-    if len(df) < (left + right + 20):
+def process_strategy_exact_pine(df, left=5, right=5):
+    n = len(df)
+    if n < (left + right + 10):
         return []
 
-    n = len(df)
-    pivot_lows = [np.nan] * n
-    pivot_highs = [np.nan] * n
+    highs = df['High'].values
+    lows = df['Low'].values
+    closes = df['Close'].values
+    times = df.index
 
-    # Exact TradingView Pivot Calculation
+    # Pre-calculate Pivot Lows and Pivot Highs as TradingView ta.pivotlow/ta.pivothigh
+    pivot_lows = [None] * n
+    pivot_highs = [None] * n
+
     for i in range(left, n - right):
-        low_val = df['Low'].iloc[i]
-        if all(low_val < df['Low'].iloc[i - left:i]) and all(low_val < df['Low'].iloc[i + 1:i + right + 1]):
-            # Confirmed right after 'right' bars
-            pivot_lows[i + right] = low_val
+        # Pivot Low Check
+        c_low = lows[i]
+        is_pl = True
+        for k in range(i - left, i):
+            if lows[k] <= c_low:
+                is_pl = False
+                break
+        if is_pl:
+            for k in range(i + 1, i + right + 1):
+                if lows[k] <= c_low:
+                    is_pl = False
+                    break
+        if is_pl:
+            pivot_lows[i + right] = c_low
 
-        high_val = df['High'].iloc[i]
-        if all(high_val > df['High'].iloc[i - left:i]) and all(high_val > df['High'].iloc[i + 1:i + right + 1]):
-            pivot_highs[i + right] = high_val
+        # Pivot High Check
+        c_high = highs[i]
+        is_ph = True
+        for k in range(i - left, i):
+            if highs[k] >= c_high:
+                is_ph = False
+                break
+        if is_ph:
+            for k in range(i + 1, i + right + 1):
+                if highs[k] >= c_high:
+                    is_ph = False
+                    break
+        if is_ph:
+            pivot_highs[i + right] = c_high
 
-    lastLow1, lastLow2 = None, None
-    lastHigh1, lastHigh2 = None, None
-    resistance, support = None, None
+    # Variable emulation of Pine Script (var float / var bool)
+    lastLow1 = None
+    lastLow2 = None
+    lastHigh1 = None
+    lastHigh2 = None
+
+    resistance = None
+    support = None
 
     longTriggered = False
     shortTriggered = False
 
     signals = []
 
+    # Bar-by-bar Simulation exactly matching TradingView Engine
     for i in range(n):
         pl = pivot_lows[i]
-        if not np.isnan(pl):
+        ph = pivot_highs[i]
+
+        if pl is not None:
             lastLow2 = lastLow1
             lastLow1 = pl
             support = pl
 
-        ph = pivot_highs[i]
-        if not np.isnan(ph):
+        if ph is not None:
             lastHigh2 = lastHigh1
             lastHigh1 = ph
             resistance = ph
@@ -111,7 +144,7 @@ def process_strategy(df, left=5, right=5):
         isHL = validLows and (lastLow1 > lastLow2)
         isLH = validHighs and (lastHigh1 < lastHigh2)
 
-        close_price = df['Close'].iloc[i]
+        close_price = closes[i]
 
         longSignal = isHL and (resistance is not None) and (close_price > resistance) and not longTriggered
         shortSignal = isLH and (support is not None) and (close_price < support) and not shortTriggered
@@ -119,12 +152,12 @@ def process_strategy(df, left=5, right=5):
         if longSignal:
             longTriggered = True
             shortTriggered = False
-            signals.append(("LONG", close_price, df.index[i]))
+            signals.append(("LONG", close_price, times[i]))
 
         if shortSignal:
             shortTriggered = True
             longTriggered = False
-            signals.append(("SHORT", close_price, df.index[i]))
+            signals.append(("SHORT", close_price, times[i]))
 
     return signals
 
@@ -136,7 +169,8 @@ def run_scanner():
     signaled_history = load_signaled_history()
 
     try:
-        data = yf.download(FNO_STOCKS, period="7d", interval="15m", group_by='ticker', threads=True, progress=False)
+        # 60d period ensures historical pivot memory is completely warm like TradingView
+        data = yf.download(FNO_STOCKS, period="60d", interval="15m", group_by='ticker', threads=True, progress=False)
     except Exception as e:
         print(f"Data Fetch Error: {e}")
         return
@@ -144,10 +178,10 @@ def run_scanner():
     for symbol in FNO_STOCKS:
         try:
             df = data[symbol].dropna().copy() if symbol in data else None
-            if df is None or df.empty or len(df) < 30:
+            if df is None or df.empty or len(df) < 50:
                 continue
 
-            signals = process_strategy(df)
+            signals = process_strategy_exact_pine(df)
 
             for sig_type, price, candle_time in signals:
                 if candle_time.tzinfo is None:
@@ -157,6 +191,7 @@ def run_scanner():
 
                 candle_day = candle_time.strftime("%Y-%m-%d")
 
+                # Filter: Aaj ke din ke bane signals hi Telegram par bhejo
                 if candle_day == today_str:
                     signal_key = f"{symbol}_{sig_type}_{candle_time.strftime('%Y%m%d_%H%M')}"
 
