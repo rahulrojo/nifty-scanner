@@ -8,18 +8,17 @@ import pytz
 import requests
 
 # ==============================================================================
-# SETTING: Sirf pehli baar 2 din ke signal lene ke liye ise True rakha hai.
-# Telegram par ek baar message aane ke baad ise CHANGE karke False kar dena.
+# SCAN_PAST_2_DAYS = True -> Pehli baar run par past 2 days ke signals aayenge.
+# Signals Telegram par aane ke baad ise False karke save kar dena.
 # ==============================================================================
 SCAN_PAST_2_DAYS = True  
 
-# --- TELEGRAM BOT CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def send_telegram_msg(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Error: Telegram credentials not set in environment variables.")
+        print("Error: TELEGRAM_BOT_TOKEN ya TELEGRAM_CHAT_ID missing hai.")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
@@ -28,17 +27,48 @@ def send_telegram_msg(message):
     except Exception as e:
         print(f"Failed to send Telegram message: {e}")
 
-# --- F&O SYMBOLS (INDICES + TOP F&O STOCKS) ---
+# --- ALL NSE F&O INDICES & COMPLETE F&O STOCKS LIST ---
 SYMBOLS = [
     # Major Indices
-    "^NSEI", "^NSEBANK", "^FINNIFTY",
-    # Top F&O Stocks
-    "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS",
-    "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "KOTAKBANK.NS", "LT.NS",
-    "AXISBANK.NS", "TATAMOTORS.NS", "TATASTEEL.NS", "MARUTI.NS", "SUNPHARMA.NS",
-    "TITAN.NS", "BAJFINANCE.NS", "NTPC.NS", "ONGC.NS", "POWERGRID.NS",
-    "HCLTECH.NS", "M&M.NS", "ADANIENT.NS", "ADANIPORTS.NS", "COALINDIA.NS",
-    "WIPRO.NS", "ULTRACEMCO.NS", "JSWSTEEL.NS", "GRASIM.NS", "HINDALCO.NS"
+    "^NSEI", "^NSEBANK", "^FINNIFTY", "^NIFTYSMLCAP50",
+    
+    # Complete F&O Stocks (NSE)
+    "AARTIIND.NS", "ABB.NS", "ABBOTINDIA.NS", "ABCAPITAL.NS", "ABFRL.NS", "ACC.NS", 
+    "ADANIENT.NS", "ADANIPORTS.NS", "ALKEM.NS", "AMBUJACEM.NS", "APOLLOHOSP.NS", 
+    "APOLLOTYRE.NS", "ASHOKLEY.NS", "ASIANPAINT.NS", "ASTRAL.NS", "ATUL.NS", 
+    "AUBANK.NS", "AUROPHARMA.NS", "AXISBANK.NS", "BAJAJ-AUTO.NS", "BAJAJFINSV.NS", 
+    "BAJFINANCE.NS", "BALKRISIND.NS", "BALRAMCHIN.NS", "BANDHANBNK.NS", "BANKBARODA.NS", 
+    "BATAINDIA.NS", "BEL.NS", "BHARATFORG.NS", "BHARTIARTL.NS", "BHEL.NS", 
+    "BIOCON.NS", "BPCL.NS", "BRITANNIA.NS", "BSOFT.NS", "CANBK.NS", 
+    "CANFINHOME.NS", "CHAMBLFERT.NS", "CHOLAFIN.NS", "CIPLA.NS", "COALINDIA.NS", 
+    "COFORGE.NS", "COLPAL.NS", "CONCOR.NS", "COROMANDEL.NS", "CROMPTON.NS", 
+    "CUMMINSIND.NS", "DABUR.NS", "DALBHARAT.NS", "DEEPAKNTR.NS", "DIVISLAB.NS", 
+    "DIXON.NS", "DLF.NS", "DRREDDY.NS", "EICHERMOT.NS", "ESCORTS.NS", 
+    "EXIDEIND.NS", "FEDERALBNK.NS", "GAIL.NS", "GLENMARK.NS", "GODREJCP.NS", 
+    "GODREJPROP.NS", "GRANULES.NS", "GRASIM.NS", "GUJGASLTD.NS", "HAL.NS", 
+    "HAVELLS.NS", "HCLTECH.NS", "HDFCBANK.NS", "HDFCLIFE.NS", "HEROMOTOCO.NS", 
+    "HINDALCO.NS", "HINDCOPPER.NS", "HINDPETRO.NS", "HINDUNILVR.NS", "ICICIBANK.NS", 
+    "ICICIGI.NS", "ICICIPRULI.NS", "IDEA.NS", "IDFCFIRSTB.NS", "IEX.NS", 
+    "IGL.NS", "INDHOTEL.NS", "INDIACEM.NS", "INDUSINDBK.NS", "INDUSTOWER.NS", 
+    "INFY.NS", "IOC.NS", "IPCALAB.NS", "IRCTC.NS", "IREDA.NS", 
+    "IRFC.NS", "ITC.NS", "JINDALSTEL.NS", "JIOFIN.NS", "JKCEMENT.NS", 
+    "JSWSTEEL.NS", "JUBLFOOD.NS", "KALYANKJIL.NS", "KEI.NS", "KOTAKBANK.NS", 
+    "LALPATHLAB.NS", "LICHSGFIN.NS", "LT.NS", "LTIM.NS", "LTTS.NS", 
+    "LUPIN.NS", "M&M.NS", "M&MFIN.NS", "MANAPPURAM.NS", "MARICO.NS", 
+    "MARUTI.NS", "MCDOWELL-N.NS", "MCX.NS", "METROPOLIS.NS", "MFSL.NS", 
+    "MGL.NS", "MOTHERSON.NS", "MPHASIS.NS", "MRF.NS", "MUTHOOTFIN.NS", 
+    "NATIONALUM.NS", "NAUKRI.NS", "NAVINFLUOR.NS", "NESTLEIND.NS", "NMDC.NS", 
+    "NTPC.NS", "OBEROIRLTY.NS", "OFSS.NS", "ONGC.NS", "PAGEIND.NS", 
+    "PERSISTENT.NS", "PETRONET.NS", "PFC.NS", "PIDILITIND.NS", "PIIND.NS", 
+    "PNB.NS", "POLYCAB.NS", "POWERGRID.NS", "PVRINOX.NS", "RAMCOCEM.NS", 
+    "RBLBANK.NS", "RECLTD.NS", "RELIANCE.NS", "SAIL.NS", "SBICARD.NS", 
+    "SBILIFE.NS", "SBIN.NS", "SHREECEM.NS", "SHRIRAMFIN.NS", "SIEMENS.NS", 
+    "SOLARINDS.NS", "SONACOMS.NS", "SRF.NS", "SUNPHARMA.NS", "SUNTV.NS", 
+    "SYNGENE.NS", "TATACHEM.NS", "TATACOMM.NS", "TATACONSUM.NS", "TATAMOTORS.NS", 
+    "TATAPOWER.NS", "TATASTEEL.NS", "TCS.NS", "TECHM.NS", "TITAN.NS", 
+    "TORNTPHARM.NS", "TORNTPOWER.NS", "TRENT.NS", "TVSMOTOR.NS", "UBL.NS", 
+    "ULTRACEMCO.NS", "UPL.NS", "VBL.NS", "VEDL.NS", "VOLTAS.NS", 
+    "WIPRO.NS", "ZYDUSLIFE.NS"
 ]
 
 def calculate_rsi(series, period=14):
@@ -49,23 +79,19 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 def analyze_symbol(symbol):
+    count = 0
     try:
-        # Fetch 7 days of 15m data to accurately calculate 200 EMA
-        df = yf.download(symbol, period="7d", interval="15m", progress=False)
+        df = yf.download(symbol, period="10d", interval="15m", progress=False)
         if df.empty or len(df) < 205:
-            return
+            return 0
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        # --- EXACT SCALPING STRATEGY FORMULAS ---
-        df['src'] = df['Low']  # Source is Low as per Pine Script
-
-        # SMA 25 & EMA 200 of Low
+        df['src'] = df['Low']
         df['out_sma'] = df['src'].rolling(window=25).mean()
         df['out_ema'] = df['src'].ewm(span=200, adjust=False).mean()
 
-        # Keltner Channel (Length 10, Mult 2.0, ATR 14)
         df['ma_k'] = df['src'].rolling(window=10).mean()
         high_low = df['High'] - df['Low']
         high_cp = (df['High'] - df['Close'].shift(1)).abs()
@@ -75,22 +101,18 @@ def analyze_symbol(symbol):
         df['kelt_upper'] = df['ma_k'] + (df['atr'] * 2.0)
         df['kelt_lower'] = df['ma_k'] - (df['atr'] * 2.0)
 
-        # Stochastic %K (10, 1, 1)
         low_10 = df['Low'].rolling(window=10).min()
         high_10 = df['High'].rolling(window=10).max()
         df['stoch_k'] = 100 * ((df['Close'] - low_10) / (high_10 - low_10))
 
-        # MACD Fast (4, 34, 5) on Low
         df['fast_ma'] = df['src'].ewm(span=4, adjust=False).mean()
         df['slow_ma'] = df['src'].ewm(span=34, adjust=False).mean()
         df['macd'] = df['fast_ma'] - df['slow_ma']
         df['macd_signal'] = df['macd'].ewm(span=5, adjust=False).mean()
         df['macd_hist'] = df['macd'] - df['macd_signal']
 
-        # RSI 14
         df['RSI'] = calculate_rsi(df['Close'], 14)
 
-        # --- SIGNAL TRIGGERS ---
         df['long_signal'] = (
             (df['Close'] > df['out_sma']) &
             (df['Close'] < df['kelt_upper']) &
@@ -112,23 +134,24 @@ def analyze_symbol(symbol):
         ist = pytz.timezone('Asia/Kolkata')
         display_symbol = symbol.replace(".NS", "").replace("^", "")
 
-        now_ist = datetime.datetime.now(ist)
-        two_days_ago = now_ist - datetime.timedelta(days=2)
-
-        # Ignore unclosed active bar
         df_completed = df.iloc[:-1]
 
+        # 1 day = 25 candles (15m). 2 days = 50 candles.
         if SCAN_PAST_2_DAYS:
-            # Check all candles of last 2 days
-            df_scan = df_completed[df_completed.index >= two_days_ago]
+            df_scan = df_completed.tail(50)
         else:
-            # Check ONLY the last completed 15m candle
-            df_scan = df_completed.iloc[-1:]
+            df_scan = df_completed.tail(1)
 
         for idx, row in df_scan.iterrows():
-            candle_time = idx.tz_convert(ist).strftime('%Y-%m-%d %H:%M IST')
+            if idx.tzinfo is None:
+                candle_dt = pytz.utc.localize(idx).astimezone(ist)
+            else:
+                candle_dt = idx.astimezone(ist)
+                
+            candle_time = candle_dt.strftime('%Y-%m-%d %H:%M IST')
 
             if row['long_signal']:
+                count += 1
                 msg = (
                     f"🔹 <b>SCALP LONG ALERT (15m)</b> 🔹\n\n"
                     f"<b>Symbol:</b> {display_symbol}\n"
@@ -140,6 +163,7 @@ def analyze_symbol(symbol):
                 time.sleep(0.3)
 
             elif row['short_signal']:
+                count += 1
                 msg = (
                     f"🔻 <b>SCALP SHORT ALERT (15m)</b> 🔻\n\n"
                     f"<b>Symbol:</b> {display_symbol}\n"
@@ -153,6 +177,8 @@ def analyze_symbol(symbol):
     except Exception as e:
         print(f"Error processing {symbol}: {e}")
 
+    return count
+
 if __name__ == "__main__":
     now_ist = datetime.datetime.now(pytz.timezone('Asia/Kolkata')).strftime('%Y-%m-%d %H:%M:%S IST')
     
@@ -161,8 +187,11 @@ if __name__ == "__main__":
         f"🚀 <b>Scalping System Bot Started!</b>\n"
         f"⏰ <b>Execution Time:</b> {now_ist}\n"
         f"📊 <b>Mode:</b> {mode_desc}\n"
-        f"🎯 Scanning 15m F&O (LONG & SHORT)..."
+        f"🎯 Scanning 180+ F&O Stocks & Indices (15m)..."
     )
 
+    total_found = 0
     for sym in SYMBOLS:
-        analyze_symbol(sym)
+        total_found += analyze_symbol(sym)
+
+    send_telegram_msg(f"✅ <b>Scan Complete!</b>\nTotal Signals Found: <b>{total_found}</b>")
