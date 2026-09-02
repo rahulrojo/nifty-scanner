@@ -8,8 +8,8 @@ import pytz
 import requests
 
 # ==============================================================================
-# SCAN_PAST_2_DAYS = True -> Pehli baar run par past 2 days ke signals aayenge.
-# Signals Telegram par aane ke baad ise False karke save kar dena.
+# SCAN_PAST_2_DAYS = True  -> Pehli baar run par pichhle 2 din ke FRESH signals aayenge.
+# Ek baar Telegram message milne ke baad ise False karke save karein.
 # ==============================================================================
 SCAN_PAST_2_DAYS = True  
 
@@ -27,12 +27,11 @@ def send_telegram_msg(message):
     except Exception as e:
         print(f"Failed to send Telegram message: {e}")
 
-# --- ALL NSE F&O INDICES & COMPLETE F&O STOCKS LIST ---
 SYMBOLS = [
     # Major Indices
     "^NSEI", "^NSEBANK", "^FINNIFTY", "^NIFTYSMLCAP50",
     
-    # Complete F&O Stocks (NSE)
+    # All F&O Stocks
     "AARTIIND.NS", "ABB.NS", "ABBOTINDIA.NS", "ABCAPITAL.NS", "ABFRL.NS", "ACC.NS", 
     "ADANIENT.NS", "ADANIPORTS.NS", "ALKEM.NS", "AMBUJACEM.NS", "APOLLOHOSP.NS", 
     "APOLLOTYRE.NS", "ASHOKLEY.NS", "ASIANPAINT.NS", "ASTRAL.NS", "ATUL.NS", 
@@ -113,7 +112,8 @@ def analyze_symbol(symbol):
 
         df['RSI'] = calculate_rsi(df['Close'], 14)
 
-        df['long_signal'] = (
+        # Raw Condition States
+        long_cond = (
             (df['Close'] > df['out_sma']) &
             (df['Close'] < df['kelt_upper']) &
             (df['Close'] > df['kelt_lower']) &
@@ -122,7 +122,7 @@ def analyze_symbol(symbol):
             (df['Close'] > df['out_ema'])
         )
 
-        df['short_signal'] = (
+        short_cond = (
             (df['Close'] < df['out_sma']) &
             (df['Close'] < df['kelt_upper']) &
             (df['Close'] > df['kelt_lower']) &
@@ -130,6 +130,10 @@ def analyze_symbol(symbol):
             (df['stoch_k'] > 50) &
             (df['Close'] < df['out_ema'])
         )
+
+        # FRESH TRIGGER ONLY: Signal must turn True from False (Prevents continuous repeat alerts)
+        df['long_signal'] = long_cond & (~long_cond.shift(1).fillna(False))
+        df['short_signal'] = short_cond & (~short_cond.shift(1).fillna(False))
 
         ist = pytz.timezone('Asia/Kolkata')
         display_symbol = symbol.replace(".NS", "").replace("^", "")
