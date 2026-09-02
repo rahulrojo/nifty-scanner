@@ -8,8 +8,8 @@ import pytz
 import requests
 
 # ==============================================================================
-# SCAN_PAST_2_DAYS = True  -> Pehli baar run par pichhle 2 din ke FRESH signals aayenge.
-# Ek baar Telegram message milne ke baad ise False karke save karein.
+# SCAN_PAST_2_DAYS = True  -> Pehli baar pichhle 2 din ke EXACT TradingView signals aayenge.
+# Signals Telegram par aane ke baad ise Change karke False kar dena.
 # ==============================================================================
 SCAN_PAST_2_DAYS = True  
 
@@ -27,11 +27,9 @@ def send_telegram_msg(message):
     except Exception as e:
         print(f"Failed to send Telegram message: {e}")
 
+# Complete NSE F&O List
 SYMBOLS = [
-    # Major Indices
     "^NSEI", "^NSEBANK", "^FINNIFTY", "^NIFTYSMLCAP50",
-    
-    # All F&O Stocks
     "AARTIIND.NS", "ABB.NS", "ABBOTINDIA.NS", "ABCAPITAL.NS", "ABFRL.NS", "ACC.NS", 
     "ADANIENT.NS", "ADANIPORTS.NS", "ALKEM.NS", "AMBUJACEM.NS", "APOLLOHOSP.NS", 
     "APOLLOTYRE.NS", "ASHOKLEY.NS", "ASIANPAINT.NS", "ASTRAL.NS", "ATUL.NS", 
@@ -80,60 +78,79 @@ def calculate_rsi(series, period=14):
 def analyze_symbol(symbol):
     count = 0
     try:
-        df = yf.download(symbol, period="10d", interval="15m", progress=False)
+        # Fetch 60d of 15m data to properly align EMA 200 and long-term position state
+        df = yf.download(symbol, period="60d", interval="15m", progress=False)
         if df.empty or len(df) < 205:
             return 0
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        df['src'] = df['Low']
-        df['out_sma'] = df['src'].rolling(window=25).mean()
-        df['out_ema'] = df['src'].ewm(span=200, adjust=False).mean()
+        # --- EXACT PINE SCRIPT FORMULAS ---
+        src = df['Low']
 
-        df['ma_k'] = df['src'].rolling(window=10).mean()
+        # Moving Averages
+        df['out'] = src.rolling(window=25).mean()              # SMA(low, 25)
+        df['out2'] = src.ewm(span=200, adjust=False).mean()    # EMA(low, 200)
+
+        # Keltner Channel
+        ma_k = src.rolling(window=10).mean()                    # SMA(low, 10)
         high_low = df['High'] - df['Low']
         high_cp = (df['High'] - df['Close'].shift(1)).abs()
         low_cp = (df['Low'] - df['Close'].shift(1)).abs()
         tr = pd.concat([high_low, high_cp, low_cp], axis=1).max(axis=1)
-        df['atr'] = tr.ewm(alpha=1/14, adjust=False).mean()
-        df['kelt_upper'] = df['ma_k'] + (df['atr'] * 2.0)
-        df['kelt_lower'] = df['ma_k'] - (df['atr'] * 2.0)
+        rangema = tr.ewm(alpha=1/14, adjust=False).mean()       # ta.atr(14) via Wilder RMA
+        df['upper'] = ma_k + rangema * 2.0
+        df['lower'] = ma_k - rangema * 2.0
 
+        # Stochastic (10, 1, 1)
         low_10 = df['Low'].rolling(window=10).min()
         high_10 = df['High'].rolling(window=10).max()
         df['stoch_k'] = 100 * ((df['Close'] - low_10) / (high_10 - low_10))
 
-        df['fast_ma'] = df['src'].ewm(span=4, adjust=False).mean()
-        df['slow_ma'] = df['src'].ewm(span=34, adjust=False).mean()
-        df['macd'] = df['fast_ma'] - df['slow_ma']
-        df['macd_signal'] = df['macd'].ewm(span=5, adjust=False).mean()
-        df['macd_hist'] = df['macd'] - df['macd_signal']
+        # MACD (4, 34, 5) on Low
+        fast_ma = src.ewm(span=4, adjust=False).mean()
+        slow_ma = src.ewm(span=34, adjust=False).mean()
+        macd = fast_ma - slow_ma
+        signal = macd.ewm(span=5, adjust=False).mean()
+        df['hist'] = macd - signal
 
         df['RSI'] = calculate_rsi(df['Close'], 14)
 
-        # Raw Condition States
-        long_cond = (
-            (df['Close'] > df['out_sma']) &
-            (df['Close'] < df['kelt_upper']) &
-            (df['Close'] > df['kelt_lower']) &
-            (df['macd_hist'] < 0) &
+        # Raw Strategy Signal Conditions (Pine Script exact match)
+        df['long_cond'] = (
+            (df['Close'] > df['out']) &
+            (df['Close'] < df['upper']) &
+            (df['Close'] > df['lower']) &
+            (df['hist'] < 0) &
             (df['stoch_k'] < 50) &
-            (df['Close'] > df['out_ema'])
+            (df['Close'] > df['out2'])
         )
 
-        short_cond = (
-            (df['Close'] < df['out_sma']) &
-            (df['Close'] < df['kelt_upper']) &
-            (df['Close'] > df['kelt_lower']) &
-            (df['macd_hist'] > 0) &
+        df['short_cond'] = (
+            (df['Close'] < df['out']) &
+            (df['Close'] < df['upper']) &
+            (df['Close'] > df['lower']) &
+            (df['hist'] > 0) &
             (df['stoch_k'] > 50) &
-            (df['Close'] < df['out_ema'])
+            (df['Close'] < df['out2'])
         )
 
-        # FRESH TRIGGER ONLY: Signal must turn True from False (Prevents continuous repeat alerts)
-        df['long_signal'] = long_cond & (~long_cond.shift(1).fillna(False))
-        df['short_signal'] = short_cond & (~short_cond.shift(1).fillna(False))
+        # --- TRADINGVIEW STRATEGY ENGINE SIMULATOR ---
+        # Simulates strategy.entry position switching behavior
+        position = 0  # 0: Flat, 1: Long, -1: Short
+        df['trade_entry_long'] = False
+        df['trade_entry_short'] = False
+
+        for i in range(len(df)):
+            if df['long_cond'].iloc[i]:
+                if position != 1:
+                    df['trade_entry_long'].iloc[i] = True
+                    position = 1
+            elif df['short_cond'].iloc[i]:
+                if position != -1:
+                    df['trade_entry_short'].iloc[i] = True
+                    position = -1
 
         ist = pytz.timezone('Asia/Kolkata')
         display_symbol = symbol.replace(".NS", "").replace("^", "")
@@ -154,7 +171,7 @@ def analyze_symbol(symbol):
                 
             candle_time = candle_dt.strftime('%Y-%m-%d %H:%M IST')
 
-            if row['long_signal']:
+            if row['trade_entry_long']:
                 count += 1
                 msg = (
                     f"🔹 <b>SCALP LONG ALERT (15m)</b> 🔹\n\n"
@@ -166,7 +183,7 @@ def analyze_symbol(symbol):
                 send_telegram_msg(msg)
                 time.sleep(0.3)
 
-            elif row['short_signal']:
+            elif row['trade_entry_short']:
                 count += 1
                 msg = (
                     f"🔻 <b>SCALP SHORT ALERT (15m)</b> 🔻\n\n"
