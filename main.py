@@ -11,7 +11,7 @@ import requests
 # SCAN_PAST_2_DAYS = True  -> Sirf ek baar run karke pichhle 2 din ke signals dekhein.
 # Uske baad ise False karke save kar dein live automated scanning ke liye.
 # ==============================================================================
-SCAN_PAST_2_DAYS = True  
+SCAN_PAST_2_DAYS = False  
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
