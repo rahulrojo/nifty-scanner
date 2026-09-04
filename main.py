@@ -9,8 +9,8 @@ import yfinance as yf
 # 1. TELEGRAM & SCRIPT CONFIGURATION
 # ==============================================================================
 # Yahan apna Token aur Chat ID dalein:
-TELEGRAM_BOT_TOKEN = "PASTE_YOUR_BOT_TOKEN_HERE"
-TELEGRAM_CHAT_ID = "PASTE_YOUR_CHAT_ID_HERE"
+TELEGRAM_BOT_TOKEN = "8828219474:AAFlDta3ZZd6BpSNLg3lu7OTghoL9BQBgOQ"
+TELEGRAM_CHAT_ID = "1046208187"
 
 # TEST_MODE:
 # - True  : Run karte hi 1 Test Telegram alert bhejega connection check karne ke liye.
