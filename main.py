@@ -6,7 +6,8 @@ import yfinance as yf
 # ==============================================================================
 # CONFIGURATION & WATCHLIST
 # ==============================================================================
-# 1. TEST MODE: Set to True for testing. Set to False once verified.
+# 1. TEST MODE: Set to True to see Test Alert & bypass market hours.
+#    Set to False during live trading!
 TEST_MODE = True
 
 # 2. MARKET HOURS (IST)
@@ -14,106 +15,84 @@ MARKET_START = time(9, 0)
 MARKET_END = time(15, 40)
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# 3. MAJOR OPTION STOCKS & INDICES WATCHLIST
+# 3. WATCHLIST (Major Option Assets)
 WATCHLIST = [
-    "^NSEI",  # Nifty 50 Index
-    "^NSEBANK",  # Bank Nifty Index
+    "^NSEI",        # Nifty 50 Index
+    "^NSEBANK",     # Bank Nifty Index
     "RELIANCE.NS",  # Reliance Industries
     "HDFCBANK.NS",  # HDFC Bank
     "ICICIBANK.NS",  # ICICI Bank
-    "INFY.NS",  # Infosys
-    "TCS.NS",  # TCS
-    "SBIN.NS",  # State Bank of India
-    "BHARTIARTL.NS",  # Bharti Airtel
+    "INFY.NS",       # Infosys
+    "TCS.NS",        # TCS
+    "SBIN.NS",       # State Bank of India
+    "BHARTIARTL.NS"  # Bharti Airtel
 ]
-
 
 # ==============================================================================
 # PINE SCRIPT COMPATIBLE INDICATOR FUNCTIONS
 # ==============================================================================
 def pine_rma(series: pd.Series, length: int) -> pd.Series:
-    """Pine Script's ta.rma / Wilder's Smoothing (alpha = 1/length)"""
     return series.ewm(alpha=1.0 / length, adjust=False).mean()
 
-
 def pine_ema(series: pd.Series, length: int) -> pd.Series:
-    """Pine Script's ta.ema"""
     return series.ewm(span=length, adjust=False).mean()
 
-
 def pine_atr(df: pd.DataFrame, length: int) -> pd.Series:
-    """Pine Script's ta.atr(length) using RMA on True Range"""
-    high = df["High"]
-    low = df["Low"]
-    close = df["Close"]
-
+    high = df['High']
+    low = df['Low']
+    close = df['Close']
+    
     tr1 = high - low
     tr2 = (high - close.shift(1)).abs()
     tr3 = (low - close.shift(1)).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-
+    
     return pine_rma(tr, length)
 
-
 def pine_linreg_0(series: pd.Series, length: int) -> pd.Series:
-    """Pine Script's ta.linreg(source, length, 0) - Linear Regression Endpoint"""
     x = np.arange(length)
     x_mean = (length - 1) / 2.0
-    x_var = np.sum((x - x_mean) ** 2)
-
+    x_var = np.sum((x - x_mean)**2)
+    
     def calc_endpoint(window):
         y_mean = np.mean(window)
         slope = np.sum((x - x_mean) * (window - y_mean)) / x_var
-        return y_mean + slope * x_mean
+        return y_mean + (slope * x_mean)
 
     return series.rolling(window=length).apply(calc_endpoint, raw=True)
-
 
 # ==============================================================================
 # SQUEEZE & TRAILING ENGINE
 # ==============================================================================
-def run_squeeze_trail_engine(
-    df: pd.DataFrame,
-    length=20,
-    mult_bb=2.0,
-    mult_kc=1.5,
-    atr_period=14,
-    atr_mult=2.0,
-):
-    close = df["Close"]
-    high = df["High"]
-    low = df["Low"]
+def run_squeeze_trail_engine(df: pd.DataFrame, length=20, mult_bb=2.0, mult_kc=1.5, atr_period=14, atr_mult=2.0):
+    close = df['Close']
+    high = df['High']
+    low = df['Low']
 
-    # 1. BOLLINGER BANDS
     bb_mid = close.rolling(window=length).mean()
     bb_std = close.rolling(window=length).std(ddof=1)
     bb_upper = bb_mid + (mult_bb * bb_std)
     bb_lower = bb_mid - (mult_bb * bb_std)
 
-    # 2. KELTNER CHANNELS
     kc_ema = pine_ema(close, length)
     kc_range = pine_atr(df, length)
     kc_upper = kc_ema + (kc_range * mult_kc)
     kc_lower = kc_ema - (kc_range * mult_kc)
 
-    # 3. SQUEEZE CONDITION
     is_squeezed = (bb_upper < kc_upper) & (bb_lower > kc_lower)
     squeeze_release = is_squeezed.shift(1) & (~is_squeezed)
 
-    # 4. TTM MOMENTUM OSCILLATOR
     highest_high = high.rolling(length).max()
     lowest_low = low.rolling(length).min()
     donchian_avg = (highest_high + lowest_low) / 2.0
     mom_src = close - ((donchian_avg + kc_ema) / 2.0)
     mom = pine_linreg_0(mom_src, length)
 
-    # 5. RAW SIGNALS
     buy_signal = squeeze_release & (mom > 0) & (close > kc_ema)
     sell_signal = squeeze_release & (mom < 0) & (close < kc_ema)
 
     atr_val = pine_atr(df, atr_period)
 
-    # 6. EXACT PINE SCRIPT STATE MACHINE
     n = len(df)
     pos_state = ["NONE"] * n
     trail_sl = [np.nan] * n
@@ -125,7 +104,7 @@ def run_squeeze_trail_engine(
 
     for i in range(n):
         prev_pos = current_pos
-
+        
         b_sig = buy_signal.iloc[i]
         s_sig = sell_signal.iloc[i]
         c_price = close.iloc[i]
@@ -170,56 +149,40 @@ def run_squeeze_trail_engine(
 
     return df
 
-
-# ==============================================================================
-# MAIN EXECUTION & TIME FILTER
-# ==============================================================================
 def is_market_open() -> bool:
-    """Checks if current time is within Indian Stock Market hours (Mon-Fri 09:00 - 15:40 IST)"""
     now = datetime.now(IST)
-
-    # Weekend Check (5 = Saturday, 6 = Sunday)
     if now.weekday() >= 5:
         return False
+    return MARKET_START <= now.time() <= MARKET_END
 
-    current_time = now.time()
-    return MARKET_START <= current_time <= MARKET_END
-
-
+# ==============================================================================
+# MAIN EXECUTION
+# ==============================================================================
 def main():
     now = datetime.now(IST)
-    print(
-        f"[{now.strftime('%Y-%m-%d %H:%M:%S IST')}] Squeeze Engine Running..."
-    )
+    print(f"\n==================================================================")
+    print(f"  RUNNING SQUEEZE ENGINE | {now.strftime('%Y-%m-%d %H:%M:%S IST')}")
+    print(f"==================================================================")
 
-    # --- 1. TEST MODE MESSAGE ---
+    # --- FORCED TEST SIGNAL ALERT IF TEST_MODE IS TRUE ---
     if TEST_MODE:
-        print(
-            "------------------------------------------------------------------"
-        )
-        print("🧪 [TEST MODE ACTIVE]: Your main.py executed successfully!")
-        print(
-            "   (Is message ke aane ke baad main.py me TEST_MODE = False kar dena)"
-        )
-        print(
-            "------------------------------------------------------------------"
-        )
+        print("\n🧪 [TEST MODE ACTIVE]: Generating Mock Signal Message for Verification...")
+        print("------------------------------------------------------------------")
+        print(f"🚀 [TEST BUY ALERT]  | Asset: ^NSEI | Time: {now.strftime('%Y-%m-%d %H:%M')} | Entry: 24500.50 | Trail SL: 24420.00")
+        print(f"💥 [TEST SELL ALERT] | Asset: ^NSEBANK | Time: {now.strftime('%Y-%m-%d %H:%M')} | Entry: 51200.10 | Trail SL: 51350.00")
+        print("------------------------------------------------------------------")
+        print("👉 Message verified? Change 'TEST_MODE = False' in main.py for live scanning.\n")
 
-    # --- 2. MARKET HOURS CHECK ---
+    # Bypass market hours check in TEST_MODE
     if not is_market_open() and not TEST_MODE:
-        print(
-            "⏸ Market is currently CLOSED (Active Hours: Mon-Fri 09:00 AM to 03:40 PM IST). Skipping scanner."
-        )
+        print("⏸ Market is CLOSED. Set TEST_MODE = True to run test.")
         return
 
-    # --- 3. SCAN WATCHLIST FOR NEW 5M SIGNALS ---
     signals_found = 0
 
     for ticker in WATCHLIST:
         try:
-            df = yf.download(
-                ticker, period="3d", interval="5m", progress=False
-            )
+            df = yf.download(ticker, period="5d", interval="5m", progress=False)
             if df.empty:
                 continue
 
@@ -229,29 +192,29 @@ def main():
             df = df.dropna()
             df = run_squeeze_trail_engine(df)
 
-            # Check the last 2 closed 5m candles to avoid missing latest signal
-            latest_candles = df.iloc[-2:]
+            if df.index.tz is not None:
+                two_days_ago = pd.Timestamp.now(tz=df.index.tz) - pd.Timedelta(days=2)
+            else:
+                two_days_ago = pd.Timestamp.now() - pd.Timedelta(days=2)
 
-            for idx, row in latest_candles.iterrows():
-                if row["Valid_Buy"]:
+            recent_df = df[df.index >= two_days_ago]
+            recent_signals = recent_df[recent_df["Valid_Buy"] | recent_df["Valid_Sell"]]
+
+            if not recent_signals.empty:
+                print(f"📊 --- Signals for {ticker} (Last 2 Days) ---")
+                for idx, row in recent_signals.iterrows():
                     signals_found += 1
-                    print(
-                        f"🚀 [BIG MOVE BUY ALERT] | Asset: {ticker} | Time: {idx} | Entry: {row['Close']:.2f} | Trail SL: {row['Trail_SL']:.2f}"
-                    )
-                elif row["Valid_Sell"]:
-                    signals_found += 1
-                    print(
-                        f"💥 [BIG MOVE SELL ALERT] | Asset: {ticker} | Time: {idx} | Entry: {row['Close']:.2f} | Trail SL: {row['Trail_SL']:.2f}"
-                    )
+                    candle_time = idx.strftime('%Y-%m-%d %H:%M')
+                    if row["Valid_Buy"]:
+                        print(f"🚀 [BUY]  | Time: {candle_time} | Candle Close: {row['Close']:.2f} | Trail SL: {row['Trail_SL']:.2f}")
+                    elif row["Valid_Sell"]:
+                        print(f"💥 [SELL] | Time: {candle_time} | Candle Close: {row['Close']:.2f} | Trail SL: {row['Trail_SL']:.2f}")
 
         except Exception as e:
             print(f"Error scanning {ticker}: {e}")
 
-    if signals_found == 0:
-        print(
-            f"✅ Scan completed. No new 5-minute signals found across Watchlist."
-        )
-
+    if signals_found == 0 and not TEST_MODE:
+        print("ℹ️ Pichle 2 dino me watchlist assets par koi signal nahi mila.")
 
 if __name__ == "__main__":
     main()
