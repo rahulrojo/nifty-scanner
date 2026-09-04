@@ -4,32 +4,28 @@ import pandas as pd
 import yfinance as yf
 
 # ==============================================================================
-# CONFIGURATION & WATCHLIST
+# CONFIGURATION
 # ==============================================================================
-# 1. TEST MODE: Set to True to see Test Alert & bypass market hours.
-#    Set to False during live trading!
 TEST_MODE = True
 
-# 2. MARKET HOURS (IST)
 MARKET_START = time(9, 0)
 MARKET_END = time(15, 40)
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# 3. WATCHLIST (Major Option Assets)
 WATCHLIST = [
     "^NSEI",        # Nifty 50 Index
     "^NSEBANK",     # Bank Nifty Index
-    "RELIANCE.NS",  # Reliance Industries
+    "RELIANCE.NS",  # Reliance
     "HDFCBANK.NS",  # HDFC Bank
     "ICICIBANK.NS",  # ICICI Bank
     "INFY.NS",       # Infosys
     "TCS.NS",        # TCS
-    "SBIN.NS",       # State Bank of India
-    "BHARTIARTL.NS"  # Bharti Airtel
+    "SBIN.NS",       # SBI
+    "BHARTIARTL.NS"  # Airtel
 ]
 
 # ==============================================================================
-# PINE SCRIPT COMPATIBLE INDICATOR FUNCTIONS
+# INDICATOR FUNCTIONS
 # ==============================================================================
 def pine_rma(series: pd.Series, length: int) -> pd.Series:
     return series.ewm(alpha=1.0 / length, adjust=False).mean()
@@ -41,12 +37,10 @@ def pine_atr(df: pd.DataFrame, length: int) -> pd.Series:
     high = df['High']
     low = df['Low']
     close = df['Close']
-    
     tr1 = high - low
     tr2 = (high - close.shift(1)).abs()
     tr3 = (low - close.shift(1)).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    
     return pine_rma(tr, length)
 
 def pine_linreg_0(series: pd.Series, length: int) -> pd.Series:
@@ -62,7 +56,7 @@ def pine_linreg_0(series: pd.Series, length: int) -> pd.Series:
     return series.rolling(window=length).apply(calc_endpoint, raw=True)
 
 # ==============================================================================
-# SQUEEZE & TRAILING ENGINE
+# ENGINE LOGIC
 # ==============================================================================
 def run_squeeze_trail_engine(df: pd.DataFrame, length=20, mult_bb=2.0, mult_kc=1.5, atr_period=14, atr_mult=2.0):
     close = df['Close']
@@ -149,41 +143,33 @@ def run_squeeze_trail_engine(df: pd.DataFrame, length=20, mult_bb=2.0, mult_kc=1
 
     return df
 
-def is_market_open() -> bool:
-    now = datetime.now(IST)
-    if now.weekday() >= 5:
-        return False
-    return MARKET_START <= now.time() <= MARKET_END
-
 # ==============================================================================
 # MAIN EXECUTION
 # ==============================================================================
 def main():
     now = datetime.now(IST)
     print(f"\n==================================================================")
-    print(f"  RUNNING SQUEEZE ENGINE | {now.strftime('%Y-%m-%d %H:%M:%S IST')}")
+    print(f"🚀 SQUEEZE ENGINE RUNNING | {now.strftime('%Y-%m-%d %H:%M:%S IST')}")
     print(f"==================================================================")
 
-    # --- FORCED TEST SIGNAL ALERT IF TEST_MODE IS TRUE ---
+    # 1. FORCED TEST MESSAGE PRINT (ALWAYS EXECUTED IF TEST_MODE IS TRUE)
     if TEST_MODE:
-        print("\n🧪 [TEST MODE ACTIVE]: Generating Mock Signal Message for Verification...")
+        print("\n🧪 [TEST ALERT VERIFICATION]:")
         print("------------------------------------------------------------------")
         print(f"🚀 [TEST BUY ALERT]  | Asset: ^NSEI | Time: {now.strftime('%Y-%m-%d %H:%M')} | Entry: 24500.50 | Trail SL: 24420.00")
         print(f"💥 [TEST SELL ALERT] | Asset: ^NSEBANK | Time: {now.strftime('%Y-%m-%d %H:%M')} | Entry: 51200.10 | Trail SL: 51350.00")
-        print("------------------------------------------------------------------")
-        print("👉 Message verified? Change 'TEST_MODE = False' in main.py for live scanning.\n")
+        print("------------------------------------------------------------------\n")
 
-    # Bypass market hours check in TEST_MODE
-    if not is_market_open() and not TEST_MODE:
-        print("⏸ Market is CLOSED. Set TEST_MODE = True to run test.")
-        return
-
-    signals_found = 0
+    print("🔍 Scanning Watchlist Assets...\n")
+    total_signals = 0
 
     for ticker in WATCHLIST:
         try:
+            # Download 5-day data
             df = yf.download(ticker, period="5d", interval="5m", progress=False)
+            
             if df.empty:
+                print(f"⚠️ {ticker}: No data received from Yahoo Finance.")
                 continue
 
             if isinstance(df.columns, pd.MultiIndex):
@@ -192,29 +178,28 @@ def main():
             df = df.dropna()
             df = run_squeeze_trail_engine(df)
 
-            if df.index.tz is not None:
-                two_days_ago = pd.Timestamp.now(tz=df.index.tz) - pd.Timedelta(days=2)
-            else:
-                two_days_ago = pd.Timestamp.now() - pd.Timedelta(days=2)
+            # Filter signals across entire 5-day dataset to guarantee historical signals
+            signals_df = df[df["Valid_Buy"] | df["Valid_Sell"]]
 
-            recent_df = df[df.index >= two_days_ago]
-            recent_signals = recent_df[recent_df["Valid_Buy"] | recent_df["Valid_Sell"]]
-
-            if not recent_signals.empty:
-                print(f"📊 --- Signals for {ticker} (Last 2 Days) ---")
-                for idx, row in recent_signals.iterrows():
-                    signals_found += 1
+            if not signals_df.empty:
+                print(f"📊 --- Signals found for {ticker} ---")
+                for idx, row in signals_df.iterrows():
+                    total_signals += 1
                     candle_time = idx.strftime('%Y-%m-%d %H:%M')
                     if row["Valid_Buy"]:
                         print(f"🚀 [BUY]  | Time: {candle_time} | Candle Close: {row['Close']:.2f} | Trail SL: {row['Trail_SL']:.2f}")
                     elif row["Valid_Sell"]:
                         print(f"💥 [SELL] | Time: {candle_time} | Candle Close: {row['Close']:.2f} | Trail SL: {row['Trail_SL']:.2f}")
+                print("")
+            else:
+                print(f"ℹ️ {ticker}: Scanned {len(df)} candles. No Squeeze Signals found.")
 
         except Exception as e:
-            print(f"Error scanning {ticker}: {e}")
+            print(f"❌ Error scanning {ticker}: {e}")
 
-    if signals_found == 0 and not TEST_MODE:
-        print("ℹ️ Pichle 2 dino me watchlist assets par koi signal nahi mila.")
+    print("==================================================================")
+    print(f"✅ Scan Complete. Total Signals Identified: {total_signals}")
+    print("==================================================================\n")
 
 if __name__ == "__main__":
     main()
