@@ -1,11 +1,20 @@
 from datetime import datetime, time, timedelta, timezone
+import urllib.parse
+import urllib.request
 import numpy as np
 import pandas as pd
 import yfinance as yf
 
 # ==============================================================================
-# CONFIGURATION
+# 1. TELEGRAM & SCRIPT CONFIGURATION
 # ==============================================================================
+# Yahan apna Token aur Chat ID dalein:
+TELEGRAM_BOT_TOKEN = "PASTE_YOUR_BOT_TOKEN_HERE"
+TELEGRAM_CHAT_ID = "PASTE_YOUR_CHAT_ID_HERE"
+
+# TEST_MODE:
+# - True  : Run karte hi 1 Test Telegram alert bhejega connection check karne ke liye.
+# - False : Live market scanning ke liye setup set ho jayega.
 TEST_MODE = True
 
 MARKET_START = time(9, 0)
@@ -13,41 +22,75 @@ MARKET_END = time(15, 40)
 IST = timezone(timedelta(hours=5, minutes=30))
 
 WATCHLIST = [
-    "^NSEI",        # Nifty 50 Index
-    "^NSEBANK",     # Bank Nifty Index
+    "^NSEI",  # Nifty 50 Index
+    "^NSEBANK",  # Bank Nifty Index
     "RELIANCE.NS",  # Reliance
     "HDFCBANK.NS",  # HDFC Bank
     "ICICIBANK.NS",  # ICICI Bank
-    "INFY.NS",       # Infosys
-    "TCS.NS",        # TCS
-    "SBIN.NS",       # SBI
-    "BHARTIARTL.NS"  # Airtel
+    "INFY.NS",  # Infosys
+    "TCS.NS",  # TCS
+    "SBIN.NS",  # SBI
+    "BHARTIARTL.NS",  # Airtel
 ]
 
+
 # ==============================================================================
-# INDICATOR FUNCTIONS
+# 2. TELEGRAM SENDER FUNCTION
+# ==============================================================================
+def send_telegram_alert(message: str):
+    """Telegram Bot API se message bhejta hai."""
+    if (
+        not TELEGRAM_BOT_TOKEN
+        or TELEGRAM_BOT_TOKEN == "8828219474:AAFlDta3ZZd6BpSNLg3lu7OTghoL9BQBgOQ"
+        or not TELEGRAM_CHAT_ID
+        or TELEGRAM_CHAT_ID == "-1003921675472"
+    ):
+        print(
+            "⚠️ Telegram Token ya Chat ID missing hai! Top par add karein."
+        )
+        return
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = urllib.parse.urlencode(
+        {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
+    ).encode("utf-8")
+
+    try:
+        req = urllib.request.Request(url, data=payload)
+        with urllib.request.urlopen(req) as response:
+            if response.getcode() == 200:
+                print("📲 Telegram Alert Sent Successfully!")
+    except Exception as e:
+        print(f"❌ Telegram Sending Error: {e}")
+
+
+# ==============================================================================
+# 3. PINE SCRIPT INDICATOR ENGINE
 # ==============================================================================
 def pine_rma(series: pd.Series, length: int) -> pd.Series:
     return series.ewm(alpha=1.0 / length, adjust=False).mean()
 
+
 def pine_ema(series: pd.Series, length: int) -> pd.Series:
     return series.ewm(span=length, adjust=False).mean()
 
+
 def pine_atr(df: pd.DataFrame, length: int) -> pd.Series:
-    high = df['High']
-    low = df['Low']
-    close = df['Close']
+    high = df["High"]
+    low = df["Low"]
+    close = df["Close"]
     tr1 = high - low
     tr2 = (high - close.shift(1)).abs()
     tr3 = (low - close.shift(1)).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     return pine_rma(tr, length)
 
+
 def pine_linreg_0(series: pd.Series, length: int) -> pd.Series:
     x = np.arange(length)
     x_mean = (length - 1) / 2.0
-    x_var = np.sum((x - x_mean)**2)
-    
+    x_var = np.sum((x - x_mean) ** 2)
+
     def calc_endpoint(window):
         y_mean = np.mean(window)
         slope = np.sum((x - x_mean) * (window - y_mean)) / x_var
@@ -55,13 +98,18 @@ def pine_linreg_0(series: pd.Series, length: int) -> pd.Series:
 
     return series.rolling(window=length).apply(calc_endpoint, raw=True)
 
-# ==============================================================================
-# ENGINE LOGIC
-# ==============================================================================
-def run_squeeze_trail_engine(df: pd.DataFrame, length=20, mult_bb=2.0, mult_kc=1.5, atr_period=14, atr_mult=2.0):
-    close = df['Close']
-    high = df['High']
-    low = df['Low']
+
+def run_squeeze_trail_engine(
+    df: pd.DataFrame,
+    length=20,
+    mult_bb=2.0,
+    mult_kc=1.5,
+    atr_period=14,
+    atr_mult=2.0,
+):
+    close = df["Close"]
+    high = df["High"]
+    low = df["Low"]
 
     bb_mid = close.rolling(window=length).mean()
     bb_std = close.rolling(window=length).std(ddof=1)
@@ -98,7 +146,7 @@ def run_squeeze_trail_engine(df: pd.DataFrame, length=20, mult_bb=2.0, mult_kc=1
 
     for i in range(n):
         prev_pos = current_pos
-        
+
         b_sig = buy_signal.iloc[i]
         s_sig = sell_signal.iloc[i]
         c_price = close.iloc[i]
@@ -143,33 +191,53 @@ def run_squeeze_trail_engine(df: pd.DataFrame, length=20, mult_bb=2.0, mult_kc=1
 
     return df
 
+
+def is_market_open() -> bool:
+    now = datetime.now(IST)
+    if now.weekday() >= 5:
+        return False
+    return MARKET_START <= now.time() <= MARKET_END
+
+
 # ==============================================================================
-# MAIN EXECUTION
+# 4. MAIN EXECUTION ENGINE
 # ==============================================================================
 def main():
     now = datetime.now(IST)
-    print(f"\n==================================================================")
+    print(
+        f"\n=================================================================="
+    )
     print(f"🚀 SQUEEZE ENGINE RUNNING | {now.strftime('%Y-%m-%d %H:%M:%S IST')}")
-    print(f"==================================================================")
+    print(
+        f"=================================================================="
+    )
 
-    # 1. FORCED TEST MESSAGE PRINT (ALWAYS EXECUTED IF TEST_MODE IS TRUE)
+    # 1. TEST MODE TELEGRAM CHECK
     if TEST_MODE:
-        print("\n🧪 [TEST ALERT VERIFICATION]:")
-        print("------------------------------------------------------------------")
-        print(f"🚀 [TEST BUY ALERT]  | Asset: ^NSEI | Time: {now.strftime('%Y-%m-%d %H:%M')} | Entry: 24500.50 | Trail SL: 24420.00")
-        print(f"💥 [TEST SELL ALERT] | Asset: ^NSEBANK | Time: {now.strftime('%Y-%m-%d %H:%M')} | Entry: 51200.10 | Trail SL: 51350.00")
-        print("------------------------------------------------------------------\n")
+        test_msg = (
+            f"🧪 *TEST ALERT VERIFICATION*\n\n"
+            f"Asset: `^NSEI` (Nifty 50)\n"
+            f"Time: `{now.strftime('%Y-%m-%d %H:%M IST')}`\n"
+            f"Signal: *BIG MOVE BUY (Test)*\n\n"
+            f"Aapka Telegram Bot successfully connect ho gaya hai!"
+        )
+        print("\nSending Test Telegram Alert...")
+        send_telegram_alert(test_msg)
 
-    print("🔍 Scanning Watchlist Assets...\n")
-    total_signals = 0
+    # 2. MARKET HOURS CHECK
+    if not is_market_open() and not TEST_MODE:
+        print("⏸ Market is CLOSED. Skipping scanner.")
+        return
+
+    # 3. LIVE SCANNER FOR LATEST 5M CANDLE
+    signals_found = 0
 
     for ticker in WATCHLIST:
         try:
-            # Download 5-day data
-            df = yf.download(ticker, period="5d", interval="5m", progress=False)
-            
+            df = yf.download(
+                ticker, period="3d", interval="5m", progress=False
+            )
             if df.empty:
-                print(f"⚠️ {ticker}: No data received from Yahoo Finance.")
                 continue
 
             if isinstance(df.columns, pd.MultiIndex):
@@ -178,28 +246,41 @@ def main():
             df = df.dropna()
             df = run_squeeze_trail_engine(df)
 
-            # Filter signals across entire 5-day dataset to guarantee historical signals
-            signals_df = df[df["Valid_Buy"] | df["Valid_Sell"]]
+            # Latest 2 completed candles lookback (to avoid missing freshly closed 5m candle)
+            latest_candles = df.iloc[-2:]
 
-            if not signals_df.empty:
-                print(f"📊 --- Signals found for {ticker} ---")
-                for idx, row in signals_df.iterrows():
-                    total_signals += 1
-                    candle_time = idx.strftime('%Y-%m-%d %H:%M')
-                    if row["Valid_Buy"]:
-                        print(f"🚀 [BUY]  | Time: {candle_time} | Candle Close: {row['Close']:.2f} | Trail SL: {row['Trail_SL']:.2f}")
-                    elif row["Valid_Sell"]:
-                        print(f"💥 [SELL] | Time: {candle_time} | Candle Close: {row['Close']:.2f} | Trail SL: {row['Trail_SL']:.2f}")
-                print("")
-            else:
-                print(f"ℹ️ {ticker}: Scanned {len(df)} candles. No Squeeze Signals found.")
+            for idx, row in latest_candles.iterrows():
+                candle_time = idx.strftime("%Y-%m-%d %H:%M")
+
+                if row["Valid_Buy"]:
+                    signals_found += 1
+                    msg = (
+                        f"🚀 *BIG MOVE BUY ALERT*\n\n"
+                        f"📈 *Asset:* `{ticker}`\n"
+                        f"⏰ *Time:* `{candle_time}`\n"
+                        f"💰 *Entry Close:* `{row['Close']:.2f}`\n"
+                        f"🛡 *Trail SL:* `{row['Trail_SL']:.2f}`"
+                    )
+                    print(f"BUY Signal found for {ticker} at {candle_time}")
+                    send_telegram_alert(msg)
+
+                elif row["Valid_Sell"]:
+                    signals_found += 1
+                    msg = (
+                        f"💥 *BIG MOVE SELL ALERT*\n\n"
+                        f"📉 *Asset:* `{ticker}`\n"
+                        f"⏰ *Time:* `{candle_time}`\n"
+                        f"💰 *Entry Close:* `{row['Close']:.2f}`\n"
+                        f"🛡 *Trail SL:* `{row['Trail_SL']:.2f}`"
+                    )
+                    print(f"SELL Signal found for {ticker} at {candle_time}")
+                    send_telegram_alert(msg)
 
         except Exception as e:
-            print(f"❌ Error scanning {ticker}: {e}")
+            print(f"Error scanning {ticker}: {e}")
 
-    print("==================================================================")
-    print(f"✅ Scan Complete. Total Signals Identified: {total_signals}")
-    print("==================================================================\n")
+    print(f"\n✅ Scan Complete. Sent {signals_found} live alerts to Telegram.")
+
 
 if __name__ == "__main__":
     main()
