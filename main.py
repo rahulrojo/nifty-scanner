@@ -1,4 +1,5 @@
 from datetime import datetime, time, timedelta, timezone
+import os
 import urllib.parse
 import urllib.request
 import numpy as np
@@ -6,31 +7,66 @@ import pandas as pd
 import yfinance as yf
 
 # ==============================================================================
-# 1. TELEGRAM & SCRIPT CONFIGURATION
+# 1. CONFIGURATION & GITHUB SECRETS
 # ==============================================================================
-# Yahan apna Token aur Chat ID dalein:
-TELEGRAM_BOT_TOKEN = "8828219474:AAFlDta3ZZd6BpSNLg3lu7OTghoL9BQBgOQ"
-TELEGRAM_CHAT_ID = "1046208187"
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 # TEST_MODE:
-# - True  : Run karte hi 1 Test Telegram alert bhejega connection check karne ke liye.
-# - False : Live market scanning ke liye setup set ho jayega.
+# - True  : Pichle 1 din ke sabhi CE/PE signals Telegram par bhejega (Verification ke liye).
+# - False : Live mode — sirf fresh 15-min candle wale naye signals bhejega.
 TEST_MODE = True
 
-MARKET_START = time(9, 0)
-MARKET_END = time(15, 40)
+MARKET_START = time(9, 15)
+MARKET_END = time(15, 30)
 IST = timezone(timedelta(hours=5, minutes=30))
 
+# ==============================================================================
+# FULL NSE FnO WATCHLIST (Indices + All FnO Stocks)
+# ==============================================================================
 WATCHLIST = [
-    "^NSEI",  # Nifty 50 Index
-    "^NSEBANK",  # Bank Nifty Index
-    "RELIANCE.NS",  # Reliance
-    "HDFCBANK.NS",  # HDFC Bank
-    "ICICIBANK.NS",  # ICICI Bank
-    "INFY.NS",  # Infosys
-    "TCS.NS",  # TCS
-    "SBIN.NS",  # SBI
-    "BHARTIARTL.NS",  # Airtel
+    # --- INDICES ---
+    "^NSEI",        # Nifty 50
+    "^NSEBANK",     # Bank Nifty
+    "^FINNIFTY",    # Fin Nifty
+    "^MIDCPNIFTY",  # Midcap Nifty
+    
+    # --- STOCKS (A-Z) ---
+    "AARTIIND.NS", "ABB.NS", "ABBOTINDIA.NS", "ABCAPITAL.NS", "ABFRL.NS", 
+    "ACC.NS", "ADANIENT.NS", "ADANIPORTS.NS", "ALKEM.NS", "AMBUJACEM.NS", 
+    "APOLLOHOSP.NS", "APOLLOTYRE.NS", "ASHOKLEY.NS", "ASIANPAINT.NS", "ASTRAL.NS", 
+    "ATUL.NS", "AUBANK.NS", "AUROPHARMA.NS", "AXISBANK.NS", "BAJAJ-AUTO.NS", 
+    "BAJAJFINSV.NS", "BAJFINANCE.NS", "BALKRISIND.NS", "BALRAMCHIN.NS", "BANDHANBNK.NS", 
+    "BANKBARODA.NS", "BATAINDIA.NS", "BEL.NS", "BERGEPAINT.NS", "BHARATFORG.NS", 
+    "BHARTIARTL.NS", "BHEL.NS", "BIOCON.NS", "BPCL.NS", "BRITANNIA.NS", 
+    "BSOFT.NS", "CANBK.NS", "CANFINHOME.NS", "CHAMBLFERT.NS", "CHOLAFIN.NS", 
+    "CIPLA.NS", "COALINDIA.NS", "COFORGE.NS", "COLPAL.NS", "CONCOR.NS", 
+    "COROMANDEL.NS", "CROMPTON.NS", "CUMMINSIND.NS", "DABUR.NS", "DALBHARAT.NS", 
+    "DEEPAKNTR.NS", "DIVISLAB.NS", "DIXON.NS", "DLF.NS", "DRREDDY.NS", 
+    "EICHERMOT.NS", "ESCORTS.NS", "EXIDEIND.NS", "FEDERALBNK.NS", "GAIL.NS", 
+    "GLENMARK.NS", "GMMPFAUDLR.NS", "GNFC.NS", "GODREJCP.NS", "GODREJPROP.NS", 
+    "GRANULES.NS", "GRASIM.NS", "GUJGASLTD.NS", "HAL.NS", "HAVELLS.NS", 
+    "HCLTECH.NS", "HDFCAMC.NS", "HDFCBANK.NS", "HDFCLIFE.NS", "HEROMOTOCO.NS", 
+    "HINDALCO.NS", "HINDCOPPER.NS", "HINDPETRO.NS", "HINDUNILVR.NS", "ICICIBANK.NS", 
+    "ICICIGI.NS", "ICICIPRULI.NS", "IDEA.NS", "IDFCFIRSTB.NS", "IEX.NS", 
+    "IGL.NS", "INDHOTEL.NS", "INDIACEM.NS", "INDIAMART.NS", "INDIGO.NS", 
+    "INDUSINDBK.NS", "INDUSTOWER.NS", "INFY.NS", "IOC.NS", "IPCALAB.NS", 
+    "IRCTC.NS", "ITC.NS", "JINDALSTEL.NS", "JKCEMENT.NS", "JSWSTEEL.NS", 
+    "JUBLFOOD.NS", "KOTAKBANK.NS", "LALPATHLAB.NS", "LAURUSLABS.NS", "LICHSGFIN.NS", 
+    "LTIM.NS", "LT.NS", "LTF.NS", "LUPIN.NS", "M&M.NS", 
+    "M&MFIN.NS", "MANAPPURAM.NS", "MARICO.NS", "MARUTI.NS", "MCDOWELL-N.NS", 
+    "MCX.NS", "METROPOLIS.NS", "MFSL.NS", "MGL.NS", "MOTHERSON.NS", 
+    "MPHASIS.NS", "MRF.NS", "MUTHOOTFIN.NS", "NATIONALUM.NS", "NAVINFLUOR.NS", 
+    "NESTLEIND.NS", "NMDC.NS", "NTPC.NS", "OBEROIRLTY.NS", "OFSS.NS", 
+    "ONGC.NS", "PAGEIND.NS", "PEL.NS", "PERSISTENT.NS", "PETRONET.NS", 
+    "PFC.NS", "PIDILITIND.NS", "PIIND.NS", "PNB.NS", "POLYCAB.NS", 
+    "POWERGRID.NS", "PVRINOX.NS", "RAMCOCEM.NS", "RBLBANK.NS", "RECLTD.NS", 
+    "RELIANCE.NS", "SAIL.NS", "SBICARD.NS", "SBILIFE.NS", "SBIN.NS", 
+    "SHREECEM.NS", "SHRIRAMFIN.NS", "SIEMENS.NS", "SRF.NS", "SUNPHARMA.NS", 
+    "SUNTV.NS", "SYNGENE.NS", "TATACHEM.NS", "TATACONSUM.NS", "TATAMOTORS.NS", 
+    "TATAPOWER.NS", "TATASTEEL.NS", "TCS.NS", "TECHM.NS", "TITAN.NS", 
+    "TORNTPHARM.NS", "TRENT.NS", "TVSMOTOR.NS", "UBL.NS", "ULTRACEMCO.NS", 
+    "UPL.NS", "VEDL.NS", "VOLTAS.NS", "WIPRO.NS", "ZEEL.NS", "ZYDUSLIFE.NS"
 ]
 
 
@@ -38,22 +74,17 @@ WATCHLIST = [
 # 2. TELEGRAM SENDER FUNCTION
 # ==============================================================================
 def send_telegram_alert(message: str):
-    """Telegram Bot API se message bhejta hai."""
-    if (
-        not TELEGRAM_BOT_TOKEN
-        or TELEGRAM_BOT_TOKEN == "8828219474:AAFlDta3ZZd6BpSNLg3lu7OTghoL9BQBgOQ"
-        or not TELEGRAM_CHAT_ID
-        or TELEGRAM_CHAT_ID == "-1003921675472"
-    ):
-        print(
-            "⚠️ Telegram Token ya Chat ID missing hai! Top par add karein."
-        )
+    """Telegram Bot API se alert bhejta hai."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ Error: TELEGRAM_BOT_TOKEN ya TELEGRAM_CHAT_ID missing hai!")
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = urllib.parse.urlencode(
-        {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    ).encode("utf-8")
+    payload = urllib.parse.urlencode({
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"
+    }).encode("utf-8")
 
     try:
         req = urllib.request.Request(url, data=payload)
@@ -65,20 +96,15 @@ def send_telegram_alert(message: str):
 
 
 # ==============================================================================
-# 3. PINE SCRIPT INDICATOR ENGINE
+# 3. PINE SCRIPT INDICATOR FUNCTIONS
 # ==============================================================================
 def pine_rma(series: pd.Series, length: int) -> pd.Series:
     return series.ewm(alpha=1.0 / length, adjust=False).mean()
 
-
-def pine_ema(series: pd.Series, length: int) -> pd.Series:
-    return series.ewm(span=length, adjust=False).mean()
-
-
-def pine_atr(df: pd.DataFrame, length: int) -> pd.Series:
-    high = df["High"]
-    low = df["Low"]
-    close = df["Close"]
+def pine_atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
+    high = df['High']
+    low = df['Low']
+    close = df['Close']
     tr1 = high - low
     tr2 = (high - close.shift(1)).abs()
     tr3 = (low - close.shift(1)).abs()
@@ -86,55 +112,44 @@ def pine_atr(df: pd.DataFrame, length: int) -> pd.Series:
     return pine_rma(tr, length)
 
 
-def pine_linreg_0(series: pd.Series, length: int) -> pd.Series:
-    x = np.arange(length)
-    x_mean = (length - 1) / 2.0
-    x_var = np.sum((x - x_mean) ** 2)
-
-    def calc_endpoint(window):
-        y_mean = np.mean(window)
-        slope = np.sum((x - x_mean) * (window - y_mean)) / x_var
-        return y_mean + (slope * x_mean)
-
-    return series.rolling(window=length).apply(calc_endpoint, raw=True)
-
-
-def run_squeeze_trail_engine(
-    df: pd.DataFrame,
-    length=20,
-    mult_bb=2.0,
-    mult_kc=1.5,
-    atr_period=14,
-    atr_mult=2.0,
+# ==============================================================================
+# 4. ROMYO BIG MOVE BREAKOUT STRATEGY ENGINE (15M)
+# ==============================================================================
+def run_romyo_breakout_engine(
+    df: pd.DataFrame, 
+    donchian_len=50, 
+    use_volume=True, 
+    vol_len=20, 
+    vol_mult=1.1, 
+    use_vol_expansion=True, 
+    atr_len=14, 
+    atr_avg_len=50, 
+    trail_atr_mult=2.0
 ):
-    close = df["Close"]
-    high = df["High"]
-    low = df["Low"]
+    
+    high = df['High']
+    low = df['Low']
+    close = df['Close']
+    volume = df['Volume']
 
-    bb_mid = close.rolling(window=length).mean()
-    bb_std = close.rolling(window=length).std(ddof=1)
-    bb_upper = bb_mid + (mult_bb * bb_std)
-    bb_lower = bb_mid - (mult_bb * bb_std)
+    # 1. Donchian High/Low (Current bar excluding: [1])
+    donchian_high = high.shift(1).rolling(window=donchian_len).max()
+    donchian_low = low.shift(1).rolling(window=donchian_len).min()
 
-    kc_ema = pine_ema(close, length)
-    kc_range = pine_atr(df, length)
-    kc_upper = kc_ema + (kc_range * mult_kc)
-    kc_lower = kc_ema - (kc_range * mult_kc)
+    # 2. Volatility Expansion Filter
+    atr_val = pine_atr(df, atr_len)
+    atr_avg = atr_val.rolling(window=atr_avg_len).mean()
+    vol_expand_ok = (not use_vol_expansion) or (atr_val > atr_avg)
 
-    is_squeezed = (bb_upper < kc_upper) & (bb_lower > kc_lower)
-    squeeze_release = is_squeezed.shift(1) & (~is_squeezed)
+    # 3. Volume Filter
+    vol_avg = volume.rolling(window=vol_len).mean()
+    vol_ok = (not use_volume) or (volume > (vol_avg * vol_mult))
 
-    highest_high = high.rolling(length).max()
-    lowest_low = low.rolling(length).min()
-    donchian_avg = (highest_high + lowest_low) / 2.0
-    mom_src = close - ((donchian_avg + kc_ema) / 2.0)
-    mom = pine_linreg_0(mom_src, length)
+    # 4. Raw Signals
+    raw_buy = (close > donchian_high) & vol_ok & vol_expand_ok
+    raw_sell = (close < donchian_low) & vol_ok & vol_expand_ok
 
-    buy_signal = squeeze_release & (mom > 0) & (close > kc_ema)
-    sell_signal = squeeze_release & (mom < 0) & (close < kc_ema)
-
-    atr_val = pine_atr(df, atr_period)
-
+    # 5. Trailing Stop & Position Lock Logic
     n = len(df)
     pos_state = ["NONE"] * n
     trail_sl = [np.nan] * n
@@ -146,38 +161,40 @@ def run_squeeze_trail_engine(
 
     for i in range(n):
         prev_pos = current_pos
-
-        b_sig = buy_signal.iloc[i]
-        s_sig = sell_signal.iloc[i]
+        
+        r_buy = raw_buy.iloc[i]
+        r_sell = raw_sell.iloc[i]
         c_price = close.iloc[i]
         h_price = high.iloc[i]
         l_price = low.iloc[i]
         a_val = atr_val.iloc[i]
 
-        if pd.isna(a_val):
+        if pd.isna(a_val) or pd.isna(donchian_high.iloc[i]):
             pos_state[i] = current_pos
             continue
 
-        if b_sig and current_pos == "NONE":
+        # Strategy Entry condition (Only enter when FLAT)
+        if r_buy and current_pos == "NONE":
             current_pos = "LONG"
-            current_sl = c_price - (a_val * atr_mult)
+            current_sl = c_price - (a_val * trail_atr_mult)
 
-        if s_sig and current_pos == "NONE":
+        elif r_sell and current_pos == "NONE":
             current_pos = "SHORT"
-            current_sl = c_price + (a_val * atr_mult)
+            current_sl = c_price + (a_val * trail_atr_mult)
 
+        # Trailing SL update & Position exit check
         if current_pos == "LONG":
-            current_sl = max(current_sl, c_price - (a_val * atr_mult))
+            current_sl = max(current_sl, c_price - (a_val * trail_atr_mult))
             if l_price <= current_sl:
                 current_pos = "NONE"
 
-        if current_pos == "SHORT":
-            current_sl = min(current_sl, c_price + (a_val * atr_mult))
+        elif current_pos == "SHORT":
+            current_sl = min(current_sl, c_price + (a_val * trail_atr_mult))
             if h_price >= current_sl:
                 current_pos = "NONE"
 
-        v_buy = b_sig and (current_pos == "LONG") and (prev_pos == "NONE")
-        v_sell = s_sig and (current_pos == "SHORT") and (prev_pos == "NONE")
+        v_buy = r_buy and (current_pos == "LONG") and (prev_pos == "NONE")
+        v_sell = r_sell and (current_pos == "SHORT") and (prev_pos == "NONE")
 
         pos_state[i] = current_pos
         trail_sl[i] = current_sl if current_pos != "NONE" else np.nan
@@ -191,7 +208,6 @@ def run_squeeze_trail_engine(
 
     return df
 
-
 def is_market_open() -> bool:
     now = datetime.now(IST)
     if now.weekday() >= 5:
@@ -200,43 +216,23 @@ def is_market_open() -> bool:
 
 
 # ==============================================================================
-# 4. MAIN EXECUTION ENGINE
+# 5. MAIN EXECUTION
 # ==============================================================================
 def main():
     now = datetime.now(IST)
-    print(
-        f"\n=================================================================="
-    )
-    print(f"🚀 SQUEEZE ENGINE RUNNING | {now.strftime('%Y-%m-%d %H:%M:%S IST')}")
-    print(
-        f"=================================================================="
-    )
+    print(f"\n==================================================================")
+    print(f"🚀 ROMYO 15M BIG MOVE SCANNER RUNNING | {now.strftime('%Y-%m-%d %H:%M:%S IST')}")
+    print(f"==================================================================")
 
-    # 1. TEST MODE TELEGRAM CHECK
-    if TEST_MODE:
-        test_msg = (
-            f"🧪 *TEST ALERT VERIFICATION*\n\n"
-            f"Asset: `^NSEI` (Nifty 50)\n"
-            f"Time: `{now.strftime('%Y-%m-%d %H:%M IST')}`\n"
-            f"Signal: *BIG MOVE BUY (Test)*\n\n"
-            f"Aapka Telegram Bot successfully connect ho gaya hai!"
-        )
-        print("\nSending Test Telegram Alert...")
-        send_telegram_alert(test_msg)
-
-    # 2. MARKET HOURS CHECK
     if not is_market_open() and not TEST_MODE:
         print("⏸ Market is CLOSED. Skipping scanner.")
         return
 
-    # 3. LIVE SCANNER FOR LATEST 5M CANDLE
     signals_found = 0
 
     for ticker in WATCHLIST:
         try:
-            df = yf.download(
-                ticker, period="3d", interval="5m", progress=False
-            )
+            df = yf.download(ticker, period="5d", interval="15m", progress=False)
             if df.empty:
                 continue
 
@@ -244,43 +240,51 @@ def main():
                 df.columns = df.columns.get_level_values(0)
 
             df = df.dropna()
-            df = run_squeeze_trail_engine(df)
+            df = run_romyo_breakout_engine(df)
 
-            # Latest 2 completed candles lookback (to avoid missing freshly closed 5m candle)
-            latest_candles = df.iloc[-2:]
+            # --- TEST MODE vs LIVE MODE FILTER ---
+            if TEST_MODE:
+                if df.index.tz is not None:
+                    one_day_ago = pd.Timestamp.now(tz=df.index.tz) - pd.Timedelta(days=1)
+                else:
+                    one_day_ago = pd.Timestamp.now() - pd.Timedelta(days=1)
 
-            for idx, row in latest_candles.iterrows():
-                candle_time = idx.strftime("%Y-%m-%d %H:%M")
+                scan_df = df[df.index >= one_day_ago]
+            else:
+                scan_df = df.iloc[-2:]
+
+            target_signals = scan_df[scan_df["Valid_Buy"] | scan_df["Valid_Sell"]]
+
+            for idx, row in target_signals.iterrows():
+                signals_found += 1
+                candle_time = idx.strftime('%Y-%m-%d %H:%M IST')
 
                 if row["Valid_Buy"]:
-                    signals_found += 1
                     msg = (
-                        f"🚀 *BIG MOVE BUY ALERT*\n\n"
+                        f"🚀 *ROMYO BIG MOVE: CE BUY (15M)*\n\n"
                         f"📈 *Asset:* `{ticker}`\n"
                         f"⏰ *Time:* `{candle_time}`\n"
                         f"💰 *Entry Close:* `{row['Close']:.2f}`\n"
                         f"🛡 *Trail SL:* `{row['Trail_SL']:.2f}`"
                     )
-                    print(f"BUY Signal found for {ticker} at {candle_time}")
+                    print(f"[CE BUY] Asset: {ticker} | Time: {candle_time} | Entry: {row['Close']:.2f}")
                     send_telegram_alert(msg)
 
                 elif row["Valid_Sell"]:
-                    signals_found += 1
                     msg = (
-                        f"💥 *BIG MOVE SELL ALERT*\n\n"
+                        f"💥 *ROMYO BIG MOVE: PE BUY (15M)*\n\n"
                         f"📉 *Asset:* `{ticker}`\n"
                         f"⏰ *Time:* `{candle_time}`\n"
                         f"💰 *Entry Close:* `{row['Close']:.2f}`\n"
                         f"🛡 *Trail SL:* `{row['Trail_SL']:.2f}`"
                     )
-                    print(f"SELL Signal found for {ticker} at {candle_time}")
+                    print(f"[PE BUY] Asset: {ticker} | Time: {candle_time} | Entry: {row['Close']:.2f}")
                     send_telegram_alert(msg)
 
         except Exception as e:
             print(f"Error scanning {ticker}: {e}")
 
-    print(f"\n✅ Scan Complete. Sent {signals_found} live alerts to Telegram.")
-
+    print(f"\n✅ Scan Complete. Sent {signals_found} signals to Telegram channel.")
 
 if __name__ == "__main__":
     main()
