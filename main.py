@@ -203,25 +203,35 @@ def run_scanner():
                 # Clean display name for indexes
                 display_name = symbol.replace("^NSEI", "NIFTY 50").replace("^NSEBANK", "BANK NIFTY").replace("^CNXFIN", "FIN NIFTY")
 
-                # Trigger Waiting Buffer
-                if raw_ce and not waiting_ce:
+                # --------------------------------------------------------------
+                # STEP 1: WARNING MESSAGES (WAIT CE / WAIT PE)
+                # --------------------------------------------------------------
+                if raw_ce and not waiting_ce and not waiting_pe:
                     range_high = max(high_p, df['High'].iloc[i-1])
                     range_low = min(low_p, df['Low'].iloc[i-1])
                     waiting_ce, waiting_pe, wait_count = True, False, 0
                     
                     sig_id = f"WAIT_CE_{symbol}_{candle_time}"
                     if sig_id not in sent_signals:
-                        send_telegram_alert(f"⏳ *WAIT CE* | {display_name}\nTime: {candle_time}\nLevel: Breakout Above ₹{range_high:.2f}")
+                        msg = (f"⏳ *WAIT CE (Call Setup)* | {display_name}\n"
+                               f"Time: {candle_time}\n"
+                               f"Buy Trigger: Above ₹{range_high:.2f}\n"
+                               f"SL Level: ₹{range_low:.2f}")
+                        send_telegram_alert(msg)
                         sent_signals.append(sig_id)
 
-                elif raw_pe and not waiting_pe:
+                elif raw_pe and not waiting_pe and not waiting_ce:
                     range_high = max(high_p, df['High'].iloc[i-1])
                     range_low = min(low_p, df['Low'].iloc[i-1])
                     waiting_pe, waiting_ce, wait_count = True, False, 0
                     
                     sig_id = f"WAIT_PE_{symbol}_{candle_time}"
                     if sig_id not in sent_signals:
-                        send_telegram_alert(f"⏳ *WAIT PE* | {display_name}\nTime: {candle_time}\nLevel: Breakdown Below ₹{range_low:.2f}")
+                        msg = (f"⏳ *WAIT PE (Put Setup)* | {display_name}\n"
+                               f"Time: {candle_time}\n"
+                               f"Sell Trigger: Below ₹{range_low:.2f}\n"
+                               f"SL Level: ₹{range_high:.2f}")
+                        send_telegram_alert(msg)
                         sent_signals.append(sig_id)
 
                 if waiting_ce or waiting_pe:
@@ -230,7 +240,9 @@ def run_scanner():
                 if wait_count > MAX_WAIT_BARS:
                     waiting_ce, waiting_pe = False, False
 
-                # Entry Confirmations
+                # --------------------------------------------------------------
+                # STEP 2: ENTRY CONFIRMATION MESSAGES (BUY CE / BUY PE)
+                # --------------------------------------------------------------
                 if waiting_ce and close_p > range_high:
                     sl = range_low
                     risk = close_p - sl
@@ -238,11 +250,11 @@ def run_scanner():
                     
                     sig_id = f"BUY_CE_{symbol}_{candle_time}"
                     if sig_id not in sent_signals:
-                        msg = (f"🚀 *CE BUY NOW* | {display_name}\n"
+                        msg = (f"🚀 *BUY CE NOW (Call Entry)* | {display_name}\n"
                                f"Time: {candle_time}\n"
-                               f"Entry: ₹{close_p:.2f}\n"
-                               f"SL: ₹{sl:.2f}\n"
-                               f"Target (1:1.8): ₹{tp:.2f}")
+                               f"Entry Price: ₹{close_p:.2f}\n"
+                               f"Stop Loss: ₹{sl:.2f}\n"
+                               f"Target (1:{RR_RATIO}): ₹{tp:.2f}")
                         send_telegram_alert(msg)
                         sent_signals.append(sig_id)
                     waiting_ce = False
@@ -254,11 +266,11 @@ def run_scanner():
                     
                     sig_id = f"BUY_PE_{symbol}_{candle_time}"
                     if sig_id not in sent_signals:
-                        msg = (f"💥 *PE BUY NOW* | {display_name}\n"
+                        msg = (f"💥 *BUY PE NOW / SELL (Put Entry)* | {display_name}\n"
                                f"Time: {candle_time}\n"
-                               f"Entry: ₹{close_p:.2f}\n"
-                               f"SL: ₹{sl:.2f}\n"
-                               f"Target (1:1.8): ₹{tp:.2f}")
+                               f"Entry Price: ₹{close_p:.2f}\n"
+                               f"Stop Loss: ₹{sl:.2f}\n"
+                               f"Target (1:{RR_RATIO}): ₹{tp:.2f}")
                         send_telegram_alert(msg)
                         sent_signals.append(sig_id)
                     waiting_pe = False
