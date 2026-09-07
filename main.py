@@ -12,8 +12,8 @@ import requests
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 
-# Master Toggle: Set to False to disable Telegram alerts
-ENABLE_TELEGRAM_ALERTS = False
+# Master Toggle: Set to True for sending alerts to Telegram
+ENABLE_TELEGRAM_ALERTS = True
 
 # Major Indexes + Top 50 High Volatility / Beta F&O Stocks
 SYMBOLS = [
@@ -90,20 +90,25 @@ RR_RATIO = 1.8
 STATE_FILE = "sent_signals.json"
 
 # ==============================================================================
-# 2. STATE MANAGEMENT & TELEGRAM SENDER
+# 2. BULLETPROOF STATE MANAGEMENT & TELEGRAM SENDER
 # ==============================================================================
 def load_sent_signals():
+    """Reads JSON safely whether it is stored as list or dict"""
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, list):
+                    return set(data)
+                elif isinstance(data, dict):
+                    return set(data.keys())
         except Exception:
-            return []
-    return []
+            return set()
+    return set()
 
-def save_sent_signals(sent_list):
+def save_sent_signals(sent_set):
     with open(STATE_FILE, "w") as f:
-        json.dump(sent_list, f, indent=4)
+        json.dump(list(sent_set), f, indent=4)
 
 def send_telegram_alert(message: str):
     if not ENABLE_TELEGRAM_ALERTS:
@@ -214,9 +219,7 @@ def run_scanner():
 
                 display_name = symbol.replace("^NSEI", "NIFTY 50").replace("^NSEBANK", "BANK NIFTY").replace("^CNXFIN", "FIN NIFTY")
 
-                # --------------------------------------------------------------
-                # 1. WAIT ALERT (When Squeeze Starts/Consolidates)
-                # --------------------------------------------------------------
+                # 1. WAIT ALERT
                 if sqz_start:
                     if mom > 0 and (not USE_TREND or close_p > ema200):
                         sig_id = f"WAIT_CE_{symbol}_{candle_time}"
@@ -226,7 +229,7 @@ def run_scanner():
                                    f"Current Price: ₹{close_p:.2f}\n"
                                    f"Status: Squeeze active, prepare for Call breakout!")
                             send_telegram_alert(msg)
-                            sent_signals.append(sig_id)
+                            sent_signals.add(sig_id)
 
                     elif mom < 0 and (not USE_TREND or close_p < ema200):
                         sig_id = f"WAIT_PE_{symbol}_{candle_time}"
@@ -236,11 +239,9 @@ def run_scanner():
                                    f"Current Price: ₹{close_p:.2f}\n"
                                    f"Status: Squeeze active, prepare for Put breakdown!")
                             send_telegram_alert(msg)
-                            sent_signals.append(sig_id)
+                            sent_signals.add(sig_id)
 
-                # --------------------------------------------------------------
-                # 2. BUY CE / BUY PE ALERT (When Squeeze Releases / Fires!)
-                # --------------------------------------------------------------
+                # 2. BUY CE / BUY PE ALERT
                 if sqz_fired:
                     if mom > 0 and (not USE_TREND or close_p > ema200):
                         sl = min(low_p, df_slice['Low'].iloc[i-1])
@@ -255,7 +256,7 @@ def run_scanner():
                                    f"Stop Loss: ₹{sl:.2f}\n"
                                    f"Target (1:{RR_RATIO}): ₹{tp:.2f}")
                             send_telegram_alert(msg)
-                            sent_signals.append(sig_id)
+                            sent_signals.add(sig_id)
 
                     elif mom < 0 and (not USE_TREND or close_p < ema200):
                         sl = max(high_p, df_slice['High'].iloc[i-1])
@@ -270,7 +271,7 @@ def run_scanner():
                                    f"Stop Loss: ₹{sl:.2f}\n"
                                    f"Target (1:{RR_RATIO}): ₹{tp:.2f}")
                             send_telegram_alert(msg)
-                            sent_signals.append(sig_id)
+                            sent_signals.add(sig_id)
 
         except Exception as e:
             print(f"Error processing {symbol}: {e}")
