@@ -148,10 +148,18 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     # 3. Squeeze Conditions
     df['isSqueezed'] = (df['bbUpper'] < df['kcUpper']) & (df['bbLower'] > df['kcLower'])
-    
-    # PEHLA BLACK SQUARE (Squeeze Start)
-    df['squeezeStart'] = df['isSqueezed'] & (~df['isSqueezed'].shift(1).fillna(False))
-    
+
+    # CONSECUTIVE SQUEEZE CANDLE COUNTER (1, 2, 3, 4...)
+    squeeze_counts = []
+    count = 0
+    for sqz in df['isSqueezed']:
+        if sqz:
+            count += 1
+        else:
+            count = 0
+        squeeze_counts.append(count)
+    df['squeezeCount'] = squeeze_counts
+
     # Squeeze Release
     df['squeezeRelease'] = df['isSqueezed'].shift(1).fillna(False) & (~df['isSqueezed'])
 
@@ -210,7 +218,7 @@ def run_scanner():
                 high_p = df['High'].iloc[i]
                 low_p = df['Low'].iloc[i]
 
-                sqz_start = df['squeezeStart'].iloc[i]
+                sqz_count = df['squeezeCount'].iloc[i]
                 buy_sig = df['buySignal'].iloc[i]
                 sell_sig = df['sellSignal'].iloc[i]
 
@@ -220,15 +228,15 @@ def run_scanner():
                                       .replace("^NSEMDCP50", "MIDCAP NIFTY")
                                       .replace(".NS", ""))
 
-                # 1. BLACK SQUARE ALERT (SQUEEZE BUILDING)
-                if sqz_start:
+                # 1. CONTINUOUS SQUEEZE BUILDING ALERT (Candle #1, #2, #3, ...)
+                if sqz_count > 0:
                     sig_id = f"SQZ_BUILD_{symbol}_{candle_time}"
                     if sig_id not in sent_signals:
                         signals_found += 1
-                        msg = (f"⬛ *SQUEEZE BUILDING (Black Square)* | {display_name}\n"
+                        msg = (f"⬛ *SQUEEZE BUILDING (Candle #{sqz_count})* | {display_name}\n"
                                f"Time: {candle_time}\n"
                                f"Current Price: ₹{close_p:.2f}\n"
-                               f"Status: Squeeze start hua hai! Breakout ke liye ready rahein.")
+                               f"Status: Squeeze continuously active (*{sqz_count}* 15-min candle). Breakout ke liye alert rahein!")
                         send_telegram_alert(msg)
                         sent_signals.add(sig_id)
 
