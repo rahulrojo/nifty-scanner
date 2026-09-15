@@ -6,7 +6,7 @@ import yfinance as yf
 # ==========================================
 # TEST SETTING (Badd mein isse False kar dena)
 # ==========================================
-SEND_TEST_MESSAGE = True  
+SEND_TEST_MESSAGE = False  
 
 # Telegram Config (GitHub Secrets)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
