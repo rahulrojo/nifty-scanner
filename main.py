@@ -1,274 +1,152 @@
 import os
-import json
-import datetime
-import pandas as pd
-import numpy as np
-import yfinance as yf
 import requests
+import pandas as pd
+import yfinance as yf
 
-# Pandas future warning hide karne ke liye
-pd.set_option('future.no_silent_downcasting', True)
+# ==========================================
+# TEST SETTING (Badd mein isse False kar dena)
+# ==========================================
+SEND_TEST_MESSAGE = True  
 
-# ==============================================================================
-# 1. CONFIGURATION & ALL INDEXES + ALL F&O STOCKS
-# ==============================================================================
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
+# Telegram Config (GitHub Secrets)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-ENABLE_TELEGRAM_ALERTS = True
-TIMEFRAME = "15m"
+# Tickers List (Major Indexes + High Volatility FnO Stocks)
+SYMBOLS = {
+    # Major Indexes
+    "^NSEI": "NIFTY 50",
+    "^NSEBANK": "BANK NIFTY",
+    "NIFTY_FIN_SERVICE.NS": "FIN NIFTY",
+    # High Volume & Volatility FnO Stocks
+    "RELIANCE.NS": "RELIANCE",
+    "SBIN.NS": "SBIN",
+    "HDFCBANK.NS": "HDFCBANK",
+    "ICICIBANK.NS": "ICICIBANK",
+    "INFY.NS": "INFY",
+    "TATAMOTORS.NS": "TATAMOTORS",
+    "TATASTEEL.NS": "TATASTEEL",
+    "ADANIENT.NS": "ADANIENT",
+    "BHARTIARTL.NS": "BHARTIARTL",
+    "AXISBANK.NS": "AXISBANK",
+    "BAJFINANCE.NS": "BAJFINANCE",
+    "LT.NS": "LT",
+    "MARUTI.NS": "MARUTI",
+    "SUNPHARMA.NS": "SUNPHARMA",
+    "TITAN.NS": "TITAN",
+    "TCS.NS": "TCS",
+    "MCX.NS": "MCX"
+}
 
-# Major Indexes + High Liquid F&O Stocks
-SYMBOLS = [
-    # --- INDEXES ---
-    "^NSEI", "^NSEBANK", "^CNXFIN", "^NSEMDCP50",
-
-    # --- TOP F&O STOCKS ---
-    "AARTIIND.NS", "ABB.NS", "ABBOTINDIA.NS", "ABCAPITAL.NS", "ABFRL.NS", 
-    "ACC.NS", "ADANIENT.NS", "ADANIPORTS.NS", "ALKEM.NS", "AMBUJACEM.NS", 
-    "APOLLOHOSP.NS", "APOLLOTYRE.NS", "ASHOKLEY.NS", "ASIANPAINT.NS", "ASTRAL.NS", 
-    "ATUL.NS", "AUBANK.NS", "AUROPHARMA.NS", "AXISBANK.NS", "BAJAJ-AUTO.NS", 
-    "BAJAJFINSV.NS", "BAJFINANCE.NS", "BALKRISIND.NS", "BALRAMCHIN.NS", "BANDHANBNK.NS", 
-    "BANKBARODA.NS", "BATAINDIA.NS", "BEL.NS", "BERGEPAINT.NS", "BHARATFORG.NS", 
-    "BHARTIARTL.NS", "BHEL.NS", "BIOCON.NS", "BSOFT.NS", "BPCL.NS", 
-    "BRITANNIA.NS", "CANBK.NS", "CANFINHOME.NS", "CHAMBLFERT.NS", "CHOLAFIN.NS", 
-    "CIPLA.NS", "COALINDIA.NS", "COFORGE.NS", "COLPAL.NS", "CONCOR.NS", 
-    "COROMANDEL.NS", "CROMPTON.NS", "CUB.NS", "CUMMINSIND.NS", "DABUR.NS", 
-    "DALBHARAT.NS", "DEEPAKNTR.NS", "DIVISLAB.NS", "DIXON.NS", "DLF.NS", 
-    "DRREDDY.NS", "EICHERMOT.NS", "ESCORTS.NS", "EXIDEIND.NS", "FEDERALBNK.NS", 
-    "GAIL.NS", "GLENMARK.NS", "GMRINFRA.NS", "GNFC.NS", "GODREJCP.NS", 
-    "GODREJPROP.NS", "GRANULES.NS", "GRASIM.NS", "GUJGASLTD.NS", "HAL.NS", 
-    "HAVELLS.NS", "HCLTECH.NS", "HDFCAMC.NS", "HDFCBANK.NS", "HDFCLIFE.NS", 
-    "HEROMOTOCO.NS", "HINDALCO.NS", "HINDCOPPER.NS", "HINDPETRO.NS", "HINDUNILVR.NS", 
-    "ICICIBANK.NS", "ICICIGI.NS", "ICICIPRULI.NS", "IDEA.NS", "IDFCFIRSTB.NS", 
-    "IEX.NS", "IGL.NS", "INDHOTEL.NS", "INDIACEM.NS", "INDIAMART.NS", 
-    "INDIGO.NS", "INDUSINDBK.NS", "INDUSTOWER.NS", "INFY.NS", "IOC.NS", 
-    "IPCALAB.NS", "IRCTC.NS", "ITC.NS", "JINDALSTEL.NS", "JKCEMENT.NS", 
-    "JSWSTEEL.NS", "JUBLFOOD.NS", "KOTAKBANK.NS", "LALPATHLAB.NS", "LAURUSLABS.NS", 
-    "LICHSGFIN.NS", "LTIM.NS", "LT.NS", "LTTS.NS", "LUPIN.NS", 
-    "M&M.NS", "M&MFIN.NS", "MANAPPURAM.NS", "MARICO.NS", "MARUTI.NS", 
-    "MCDOWELL-N.NS", "MCX.NS", "METROPOLIS.NS", "MFSL.NS", "MGL.NS", 
-    "MOTHERSON.NS", "MPHASIS.NS", "MRF.NS", "MUTHOOTFIN.NS", "NATIONALUM.NS", 
-    "NAUKRI.NS", "NAVINFLUOR.NS", "NESTLEIND.NS", "NMDC.NS", "NTPC.NS", 
-    "OBEROIRLTY.NS", "OFSS.NS", "ONGC.NS", "PAGEIND.NS", "PERSISTENT.NS", 
-    "PETRONET.NS", "PFC.NS", "PIDILITIND.NS", "PIIND.NS", "PNB.NS", 
-    "POLYCAB.NS", "POWERGRID.NS", "PVRINOX.NS", "RAMCOCEM.NS", "RBLBANK.NS", 
-    "REC.NS", "RELIANCE.NS", "SAIL.NS", "SBICARD.NS", "SBILIFE.NS", 
-    "SBIN.NS", "SHREECEM.NS", "SHRIRAMFIN.NS", "SIEMENS.NS", "SRF.NS", 
-    "SUNPHARMA.NS", "SUNTV.NS", "SYNGENE.NS", "TATACHEMICALS.NS", "TATACOMM.NS", 
-    "TATACONSUM.NS", "TATAMOTORS.NS", "TATAPOWER.NS", "TATASTEEL.NS", "TCS.NS", 
-    "TECHM.NS", "TITAN.NS", "TORNTPHARM.NS", "TRENT.NS", "TVSMOTOR.NS", 
-    "UBL.NS", "ULTRACEMCO.NS", "UPL.NS", "VEDL.NS", "VOLTAS.NS", 
-    "WIPRO.NS", "ZEEL.NS"
-]
-
-# Indicator Inputs (TradingView Code Matching)
-LENGTH = 20
-MULT_BB = 2.0
-MULT_KC = 1.5
-
-STATE_FILE = "sent_signals.json"
-
-# ==============================================================================
-# 2. STATE MANAGEMENT & TELEGRAM SENDER
-# ==============================================================================
-def load_sent_signals():
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return set(data)
-                elif isinstance(data, dict):
-                    return set(data.keys())
-        except Exception:
-            return set()
-    return set()
-
-def save_sent_signals(sent_set):
-    with open(STATE_FILE, "w") as f:
-        json.dump(list(sent_set), f, indent=4)
-
-def send_telegram_alert(message: str):
-    if not ENABLE_TELEGRAM_ALERTS:
-        print(f"[MUTED] Alert: {message}")
+def send_telegram(message):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram credentials missing.")
         return
-
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
-    }
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
-        res = requests.post(url, json=payload, timeout=10)
-        if res.status_code == 200:
-            print(f"[SENT TO TELEGRAM] {message}")
-        else:
-            print(f"[TELEGRAM ERROR] {res.text}")
+        requests.post(url, json=payload)
     except Exception as e:
-        print(f"[EXCEPTION] {e}")
+        print(f"Error sending telegram message: {e}")
 
-# ==============================================================================
-# 3. PINE SCRIPT MATH EXACT MATCHING
-# ==============================================================================
-def calc_linreg(series, length=20):
-    x = np.arange(length)
-    x_mean = x.mean()
-    x_dev = x - x_mean
-    var_x = (x_dev**2).sum()
+def calculate_squeeze_signals(df):
+    length = 20
+    multBB = 2.0
+    multKC = 1.5
 
-    def get_linreg_val(window):
-        if len(window) < length or np.isnan(window).any():
-            return np.nan
-        y_mean = window.mean()
-        slope = np.dot(x_dev, window - y_mean) / var_x
-        return y_mean + slope * (length - 1 - x_mean)
+    # Bollinger Bands
+    df['bbMid'] = df['Close'].rolling(window=length).mean()
+    df['bbStd'] = df['Close'].rolling(window=length).std()
+    df['bbUpper'] = df['bbMid'] + (multBB * df['bbStd'])
+    df['bbLower'] = df['bbMid'] - (multBB * df['bbStd'])
 
-    return series.rolling(window=length).apply(get_linreg_val, raw=True)
+    # Keltner Channels
+    df['kcEma'] = df['Close'].ewm(span=length, adjust=False).mean()
+    df['tr1'] = df['High'] - df['Low']
+    df['tr2'] = (df['High'] - df['Close'].shift(1)).abs()
+    df['tr3'] = (df['Low'] - df['Close'].shift(1)).abs()
+    df['tr'] = df[['tr1', 'tr2', 'tr3']].max(axis=1)
+    df['atr'] = df['tr'].rolling(window=length).mean()
 
-def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    # 1. Bollinger Bands
-    df['bbMid'] = df['Close'].rolling(window=LENGTH).mean()
-    df['std'] = df['Close'].rolling(window=LENGTH).std()
-    df['bbUpper'] = df['bbMid'] + (MULT_BB * df['std'])
-    df['bbLower'] = df['bbMid'] - (MULT_BB * df['std'])
+    df['kcUpper'] = df['kcEma'] + (df['atr'] * multKC)
+    df['kcLower'] = df['kcEma'] - (df['atr'] * multKC)
 
-    # 2. Keltner Channels (EMA + Wilder's ATR)
-    df['kcEma'] = df['Close'].ewm(span=LENGTH, adjust=False).mean()
-    
-    df['tr0'] = abs(df['High'] - df['Low'])
-    df['tr1'] = abs(df['High'] - df['Close'].shift(1))
-    df['tr2'] = abs(df['Low'] - df['Close'].shift(1))
-    df['tr'] = df[['tr0', 'tr1', 'tr2']].max(axis=1)
-    df['kcRange'] = df['tr'].ewm(alpha=1/LENGTH, adjust=False).mean() # Pine ta.atr
-
-    df['kcUpper'] = df['kcEma'] + (df['kcRange'] * MULT_KC)
-    df['kcLower'] = df['kcEma'] - (df['kcRange'] * MULT_KC)
-
-    # 3. Squeeze Conditions
+    # Squeeze Conditions
     df['isSqueezed'] = (df['bbUpper'] < df['kcUpper']) & (df['bbLower'] > df['kcLower'])
+    df['squeezeStart'] = df['isSqueezed'] & (~df['isSqueezed'].shift(1).fillna(False))
 
-    # CONSECUTIVE SQUEEZE CANDLE COUNTER (1, 2, 3, 4...)
-    squeeze_counts = []
-    count = 0
-    for sqz in df['isSqueezed']:
-        if sqz:
-            count += 1
-        else:
-            count = 0
-        squeeze_counts.append(count)
-    df['squeezeCount'] = squeeze_counts
+    # Signal Logic
+    sqStartHigh = None
+    sqStartLow = None
+    buy_signals = []
+    sell_signals = []
 
-    # Squeeze Release
-    df['squeezeRelease'] = df['isSqueezed'].shift(1).fillna(False) & (~df['isSqueezed'])
+    for i in range(len(df)):
+        row = df.iloc[i]
 
-    # 4. Pine Script Momentum
-    df['highest_20'] = df['High'].rolling(LENGTH).max()
-    df['lowest_20'] = df['Low'].rolling(LENGTH).min()
-    df['hl_avg'] = (df['highest_20'] + df['lowest_20']) / 2
-    df['mid_avg'] = (df['hl_avg'] + df['kcEma']) / 2
-    df['mom_raw'] = df['Close'] - df['mid_avg']
-    df['momentum'] = calc_linreg(df['mom_raw'], length=LENGTH)
+        if row['squeezeStart']:
+            sqStartHigh = row['High']
+            sqStartLow = row['Low']
 
-    # 5. Buy / Sell Signals (Pine Script Rules)
-    df['buySignal'] = df['squeezeRelease'] & (df['momentum'] > 0) & (df['Close'] > df['kcEma'])
-    df['sellSignal'] = df['squeezeRelease'] & (df['momentum'] < 0) & (df['Close'] < df['kcEma'])
+        buy = False
+        sell = False
 
+        # Green Candle Close > Squeeze High
+        if sqStartHigh is not None:
+            is_green = row['Close'] > row['Open']
+            if is_green and (row['Close'] > sqStartHigh):
+                buy = True
+                sqStartHigh = None
+                sqStartLow = None
+
+        # Red Candle Close < Squeeze Low
+        if sqStartLow is not None and not buy:
+            is_red = row['Close'] < row['Open']
+            if is_red and (row['Close'] < sqStartLow):
+                sell = True
+                sqStartHigh = None
+                sqStartLow = None
+
+        buy_signals.append(buy)
+        sell_signals.append(sell)
+
+    df['sqBuySignal'] = buy_signals
+    df['sqSellSignal'] = sell_signals
     return df
 
-# ==============================================================================
-# 4. SCANNER EXECUTION (TODAY'S REALTIME CANDLES)
-# ==============================================================================
-def run_scanner():
-    sent_signals = load_sent_signals()
-
-    ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
-    now_ist = datetime.datetime.now(ist_tz)
-    today_date = now_ist.date()
-
-    print(f"=== Running Indicator Mapper Scanner | IST: {now_ist.strftime('%Y-%m-%d %H:%M:%S')} ===")
-
-    signals_found = 0
-
-    for symbol in SYMBOLS:
+def scan_markets():
+    for ticker, name in SYMBOLS.items():
         try:
-            stock = yf.Ticker(symbol)
-            df = stock.history(period="5d", interval=TIMEFRAME)
-
-            if df.empty or len(df) < 50:
+            data = yf.download(ticker, period="5d", interval="15m", progress=False)
+            if data.empty or len(data) < 30:
                 continue
 
-            df = calculate_indicators(df)
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
 
-            # Scan last 2 candles
-            for i in [-2, -1]:
-                candle_dt = df.index[i]
-                if candle_dt.tzinfo is None:
-                    candle_dt = candle_dt.tz_localize('UTC').tz_convert(ist_tz)
-                else:
-                    candle_dt = candle_dt.tz_convert(ist_tz)
+            df = calculate_squeeze_signals(data)
+            
+            # Check last closed candle
+            last_bar = df.iloc[-2]
+            prev_time = df.index[-2].strftime('%d-%b %H:%M')
 
-                # Today filter
-                if candle_dt.date() != today_date:
-                    continue
+            if last_bar['sqBuySignal']:
+                msg = f"🟡 <b>SQUEEZE BUY SIGNAL</b>\n\n<b>Symbol:</b> {name}\n<b>Timeframe:</b> 15m\n<b>Close Price:</b> ₹{last_bar['Close']:.2f}\n<b>Time:</b> {prev_time}"
+                send_telegram(msg)
+                print(f"BUY Signal sent for {name}")
 
-                candle_time = candle_dt.strftime('%Y-%m-%d %H:%M')
-                close_p = df['Close'].iloc[i]
-                high_p = df['High'].iloc[i]
-                low_p = df['Low'].iloc[i]
-
-                sqz_count = df['squeezeCount'].iloc[i]
-                buy_sig = df['buySignal'].iloc[i]
-                sell_sig = df['sellSignal'].iloc[i]
-
-                display_name = (symbol.replace("^NSEI", "NIFTY 50")
-                                      .replace("^NSEBANK", "BANK NIFTY")
-                                      .replace("^CNXFIN", "FIN NIFTY")
-                                      .replace("^NSEMDCP50", "MIDCAP NIFTY")
-                                      .replace(".NS", ""))
-
-                # 1. CONTINUOUS SQUEEZE BUILDING ALERT (Candle #1, #2, #3, ...)
-                if sqz_count > 0:
-                    sig_id = f"SQZ_BUILD_{symbol}_{candle_time}"
-                    if sig_id not in sent_signals:
-                        signals_found += 1
-                        msg = (f"⬛ *SQUEEZE BUILDING (Candle #{sqz_count})* | {display_name}\n"
-                               f"Time: {candle_time}\n"
-                               f"Current Price: ₹{close_p:.2f}\n"
-                               f"Status: Squeeze continuously active (*{sqz_count}* 15-min candle). Breakout ke liye alert rahein!")
-                        send_telegram_alert(msg)
-                        sent_signals.add(sig_id)
-
-                # 2. YELLOW LABEL ALERT (BUY SIGNAL)
-                if buy_sig:
-                    sig_id = f"BUY_SIG_{symbol}_{candle_time}"
-                    if sig_id not in sent_signals:
-                        signals_found += 1
-                        msg = (f"🟡 *BUY SIGNAL (Yellow Label)* | {display_name}\n"
-                               f"Time: {candle_time}\n"
-                               f"Entry Price: ₹{close_p:.2f}\n"
-                               f"High Price Level: ₹{high_p:.2f}")
-                        send_telegram_alert(msg)
-                        sent_signals.add(sig_id)
-
-                # 3. BLUE LABEL ALERT (SELL SIGNAL)
-                if sell_sig:
-                    sig_id = f"SELL_SIG_{symbol}_{candle_time}"
-                    if sig_id not in sent_signals:
-                        signals_found += 1
-                        msg = (f"🔵 *SELL SIGNAL (Blue Label)* | {display_name}\n"
-                               f"Time: {candle_time}\n"
-                               f"Entry Price: ₹{close_p:.2f}\n"
-                               f"Low Price Level: ₹{low_p:.2f}")
-                        send_telegram_alert(msg)
-                        sent_signals.add(sig_id)
+            elif last_bar['sqSellSignal']:
+                msg = f"🖤 <b>SQUEEZE SELL SIGNAL</b>\n\n<b>Symbol:</b> {name}\n<b>Timeframe:</b> 15m\n<b>Close Price:</b> ₹{last_bar['Close']:.2f}\n<b>Time:</b> {prev_time}"
+                send_telegram(msg)
+                print(f"SELL Signal sent for {name}")
 
         except Exception as e:
-            print(f"Error scanning {symbol}: {e}")
-
-    save_sent_signals(sent_signals)
-    print(f"=== Scan Finish. Total Signals Sent: {signals_found} ===")
+            print(f"Error scanning {name}: {e}")
 
 if __name__ == "__main__":
-    run_scanner()
+    # Test Message Alert
+    if SEND_TEST_MESSAGE:
+        send_telegram("🧪 <b>SYSTEM TEST</b>\n\nSqueeze Signal Scanner script successfully run ho gayi hai!")
+        print("Test message sent to Telegram.")
+        
+    scan_markets()
