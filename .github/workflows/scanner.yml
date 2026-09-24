@@ -1,12 +1,13 @@
-name: Squeeze Signal Scanner
+name: Squeeze Scanner 30m
 
 on:
   schedule:
-    - cron: '*/15 3-10 * * 1-5' # Indian Market Time (Every 15 min from 9:00 AM to 3:30 PM IST)
-  workflow_dispatch: # Manual run trigger button in GitHub Actions
+    # Runs every 30 minutes during Indian Market Hours (UTC 3:45 AM to 10:15 AM)
+    - cron: '15,45 3-10 * * 1-5'
+  workflow_dispatch:
 
 jobs:
-  scan:
+  run-scanner:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -18,9 +19,10 @@ jobs:
           python-version: '3.10'
 
       - name: Install Dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install pandas yfinance requests
 
-      - name: Run Main Script
+      - name: Run Squeeze Scanner Script
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
