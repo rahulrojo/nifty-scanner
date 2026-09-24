@@ -4,9 +4,9 @@ import pandas as pd
 import yfinance as yf
 
 # ==========================================
-# TEST SETTING (Badd mein isse False kar dena)
+# TEST SETTING (Aap ise baad mein False kar lena)
 # ==========================================
-SEND_TEST_MESSAGE = False  
+SEND_TEST_MESSAGE = True  
 
 # Telegram Config (GitHub Secrets)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -45,7 +45,7 @@ def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
-        requests.post(url, json=payload)
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"Error sending telegram message: {e}")
 
@@ -117,7 +117,8 @@ def calculate_squeeze_signals(df):
 def scan_markets():
     for ticker, name in SYMBOLS.items():
         try:
-            data = yf.download(ticker, period="5d", interval="15m", progress=False)
+            # 30m Timeframe Support
+            data = yf.download(ticker, period="15d", interval="30m", progress=False)
             if data.empty or len(data) < 30:
                 continue
 
@@ -126,17 +127,17 @@ def scan_markets():
 
             df = calculate_squeeze_signals(data)
             
-            # Check last closed candle
+            # Check last completed candle
             last_bar = df.iloc[-2]
             prev_time = df.index[-2].strftime('%d-%b %H:%M')
 
             if last_bar['sqBuySignal']:
-                msg = f"🟡 <b>SQUEEZE BUY SIGNAL</b>\n\n<b>Symbol:</b> {name}\n<b>Timeframe:</b> 15m\n<b>Close Price:</b> ₹{last_bar['Close']:.2f}\n<b>Time:</b> {prev_time}"
+                msg = f"🟡 <b>SQUEEZE BUY SIGNAL</b>\n\n<b>Symbol:</b> {name}\n<b>Timeframe:</b> 30m\n<b>Close Price:</b> ₹{last_bar['Close']:.2f}\n<b>Time:</b> {prev_time}"
                 send_telegram(msg)
                 print(f"BUY Signal sent for {name}")
 
             elif last_bar['sqSellSignal']:
-                msg = f"🖤 <b>SQUEEZE SELL SIGNAL</b>\n\n<b>Symbol:</b> {name}\n<b>Timeframe:</b> 15m\n<b>Close Price:</b> ₹{last_bar['Close']:.2f}\n<b>Time:</b> {prev_time}"
+                msg = f"🖤 <b>SQUEEZE SELL SIGNAL</b>\n\n<b>Symbol:</b> {name}\n<b>Timeframe:</b> 30m\n<b>Close Price:</b> ₹{last_bar['Close']:.2f}\n<b>Time:</b> {prev_time}"
                 send_telegram(msg)
                 print(f"SELL Signal sent for {name}")
 
@@ -146,7 +147,7 @@ def scan_markets():
 if __name__ == "__main__":
     # Test Message Alert
     if SEND_TEST_MESSAGE:
-        send_telegram("🧪 <b>SYSTEM TEST</b>\n\nSqueeze Signal Scanner script successfully run ho gayi hai!")
+        send_telegram("🧪 <b>SYSTEM TEST</b>\n\nSqueeze Signal Scanner (30m Timeframe) script successfully run ho gayi hai!")
         print("Test message sent to Telegram.")
         
     scan_markets()
