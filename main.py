@@ -1,24 +1,25 @@
+import warnings
+warnings.filterwarnings("ignore")
+
 import os
 import requests
 import pandas as pd
+import numpy as np
 import yfinance as yf
 
 # ==========================================
-# TEST SETTING (Aap ise baad mein False kar lena)
+# TEST SETTING (Badd mein isse False kar dena)
 # ==========================================
-SEND_TEST_MESSAGE = False 
+SEND_TEST_MESSAGE = True  
 
 # Telegram Config (GitHub Secrets)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Tickers List (Major Indexes + High Volatility FnO Stocks)
 SYMBOLS = {
-    # Major Indexes
     "^NSEI": "NIFTY 50",
     "^NSEBANK": "BANK NIFTY",
     "NIFTY_FIN_SERVICE.NS": "FIN NIFTY",
-    # High Volume & Volatility FnO Stocks
     "RELIANCE.NS": "RELIANCE",
     "SBIN.NS": "SBIN",
     "HDFCBANK.NS": "HDFCBANK",
@@ -45,7 +46,8 @@ def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
-        requests.post(url, json=payload, timeout=10)
+        r = requests.post(url, json=payload, timeout=10)
+        print(f"Telegram status: {r.status_code}")
     except Exception as e:
         print(f"Error sending telegram message: {e}")
 
@@ -53,6 +55,11 @@ def calculate_squeeze_signals(df):
     length = 20
     multBB = 2.0
     multKC = 1.5
+
+    df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
+    df['High'] = pd.to_numeric(df['High'], errors='coerce')
+    df['Low'] = pd.to_numeric(df['Low'], errors='coerce')
+    df['Open'] = pd.to_numeric(df['Open'], errors='coerce')
 
     # Bollinger Bands
     df['bbMid'] = df['Close'].rolling(window=length).mean()
@@ -71,11 +78,10 @@ def calculate_squeeze_signals(df):
     df['kcUpper'] = df['kcEma'] + (df['atr'] * multKC)
     df['kcLower'] = df['kcEma'] - (df['atr'] * multKC)
 
-    # Squeeze Conditions
+    # Squeeze Logic
     df['isSqueezed'] = (df['bbUpper'] < df['kcUpper']) & (df['bbLower'] > df['kcLower'])
-    df['squeezeStart'] = df['isSqueezed'] & (~df['isSqueezed'].shift(1).fillna(False))
+    df['squeezeStart'] = df['isSqueezed'] & (~df['isSqueezed'].shift(1).astype(bool))
 
-    # Signal Logic
     sqStartHigh = None
     sqStartLow = None
     buy_signals = []
@@ -91,16 +97,14 @@ def calculate_squeeze_signals(df):
         buy = False
         sell = False
 
-        # Green Candle Close > Squeeze High
-        if sqStartHigh is not None:
+        if sqStartHigh is not None and not row['isSqueezed']:
             is_green = row['Close'] > row['Open']
             if is_green and (row['Close'] > sqStartHigh):
                 buy = True
                 sqStartHigh = None
                 sqStartLow = None
 
-        # Red Candle Close < Squeeze Low
-        if sqStartLow is not None and not buy:
+        if sqStartLow is not None and not buy and not row['isSqueezed']:
             is_red = row['Close'] < row['Open']
             if is_red and (row['Close'] < sqStartLow):
                 sell = True
@@ -115,39 +119,58 @@ def calculate_squeeze_signals(df):
     return df
 
 def scan_markets():
+    signals_sent = 0
     for ticker, name in SYMBOLS.items():
         try:
-            # 30m Timeframe Support
-            data = yf.download(ticker, period="15d", interval="30m", progress=False)
+            data = yf.download(ticker, period="10d", interval="30m", progress=False)
             if data.empty or len(data) < 30:
                 continue
 
+            # Flatten MultiIndex columns properly
             if isinstance(data.columns, pd.MultiIndex):
-                data.columns = data.columns.get_level_values(0)
+                df = data.xs(ticker, level=1, axis=1).copy() if ticker in data.columns.get_level_values(1) else data.droplevel(0, axis=1)
+            else:
+                df = data.copy()
 
-            df = calculate_squeeze_signals(data)
+            df = df.dropna().copy()
+            df = calculate_squeeze_signals(df)
+
+            # Check recent 2 bars for confirmed signal
+            check_bars = [df.iloc[-1], df.iloc[-2]]
             
-            # Check last completed candle
-            last_bar = df.iloc[-2]
-            prev_time = df.index[-2].strftime('%d-%b %H:%M')
+            for bar in check_bars:
+                bar_time = bar.name.strftime('%d-%b %H:%M')
 
-            if last_bar['sqBuySignal']:
-                msg = f"🟡 <b>SQUEEZE BUY SIGNAL</b>\n\n<b>Symbol:</b> {name}\n<b>Timeframe:</b> 30m\n<b>Close Price:</b> ₹{last_bar['Close']:.2f}\n<b>Time:</b> {prev_time}"
-                send_telegram(msg)
-                print(f"BUY Signal sent for {name}")
+                if bar['sqBuySignal']:
+                    msg = (f"🟡 <b>SQUEEZE BUY SIGNAL</b>\n\n"
+                           f"<b>Symbol:</b> {name}\n"
+                           f"<b>Timeframe:</b> 30m\n"
+                           f"<b>Close Price:</b> ₹{bar['Close']:.2f}\n"
+                           f"<b>Time:</b> {bar_time}")
+                    send_telegram(msg)
+                    signals_sent += 1
+                    print(f"BUY Signal sent for {name} at {bar_time}")
+                    break
 
-            elif last_bar['sqSellSignal']:
-                msg = f"🖤 <b>SQUEEZE SELL SIGNAL</b>\n\n<b>Symbol:</b> {name}\n<b>Timeframe:</b> 30m\n<b>Close Price:</b> ₹{last_bar['Close']:.2f}\n<b>Time:</b> {prev_time}"
-                send_telegram(msg)
-                print(f"SELL Signal sent for {name}")
+                elif bar['sqSellSignal']:
+                    msg = (f"🖤 <b>SQUEEZE SELL SIGNAL</b>\n\n"
+                           f"<b>Symbol:</b> {name}\n"
+                           f"<b>Timeframe:</b> 30m\n"
+                           f"<b>Close Price:</b> ₹{bar['Close']:.2f}\n"
+                           f"<b>Time:</b> {bar_time}")
+                    send_telegram(msg)
+                    signals_sent += 1
+                    print(f"SELL Signal sent for {name} at {bar_time}")
+                    break
 
         except Exception as e:
             print(f"Error scanning {name}: {e}")
 
+    print(f"Scanning completed. Total signals sent: {signals_sent}")
+
 if __name__ == "__main__":
-    # Test Message Alert
     if SEND_TEST_MESSAGE:
-        send_telegram("🧪 <b>SYSTEM TEST</b>\n\nSqueeze Signal Scanner (30m Timeframe) script successfully run ho gayi hai!")
+        send_telegram("🧪 <b>SYSTEM TEST</b>\n\nSqueeze Signal Scanner (30m Timeframe) updated script active!")
         print("Test message sent to Telegram.")
-        
+
     scan_markets()
