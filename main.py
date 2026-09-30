@@ -90,7 +90,6 @@ def analyze_symbol(symbol):
 
         for i in range(50, len(df)):
             row = df.iloc[i]
-            prev_row = df.iloc[i-1]
 
             # CE Wait Trigger
             if row['CE_Condition'] and not waitingCE:
@@ -130,6 +129,17 @@ def analyze_symbol(symbol):
                 clean_symbol = symbol.replace(".NS", "").replace("^", "")
                 last_price = round(float(row['Close']), 2)
 
+                # Time formatting to IST (Indian Standard Time)
+                raw_time = df.index[i]
+                try:
+                    if raw_time.tzinfo is not None:
+                        ist_time = raw_time.tz_convert('Asia/Kolkata')
+                    else:
+                        ist_time = raw_time.tz_localize('UTC').tz_convert('Asia/Kolkata')
+                    candle_time_str = ist_time.strftime('%d-%b %I:%M %p')
+                except Exception:
+                    candle_time_str = str(raw_time)
+
                 if confirmedCE:
                     sl = round(rangeLow, 2)
                     risk = last_price - sl
@@ -138,6 +148,7 @@ def analyze_symbol(symbol):
                         f"🚀 *ROMY 9.5: CE BUY NOW*\n\n"
                         f"📌 *Symbol:* {clean_symbol}\n"
                         f"⏰ *Timeframe:* 30M\n"
+                        f"🕐 *Candle Time:* {candle_time_str}\n"
                         f"💵 *Entry Price:* ₹{last_price}\n"
                         f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
                         f"🎯 *Target (TP 1:1.5):* ₹{tp}\n"
@@ -153,6 +164,7 @@ def analyze_symbol(symbol):
                         f"💥 *ROMY 9.5: PE BUY NOW*\n\n"
                         f"📌 *Symbol:* {clean_symbol}\n"
                         f"⏰ *Timeframe:* 30M\n"
+                        f"🕐 *Candle Time:* {candle_time_str}\n"
                         f"💵 *Entry Price:* ₹{last_price}\n"
                         f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
                         f"🎯 *Target (TP 1:1.5):* ₹{tp}\n"
