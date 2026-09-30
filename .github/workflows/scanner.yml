@@ -1,28 +1,30 @@
-name: Squeeze Scanner 30m
+name: Romy 9.5 Master Breakout Bot 30M
 
 on:
   schedule:
-    # Runs every 30 minutes during Indian Market Hours (9:15 AM to 3:30 PM IST)
-    - cron: '15,45 3-10 * * 1-5'
-  workflow_dispatch:
+    # NSE Market Hours (Mon-Fri 9:15 AM to 3:30 PM IST) -> 3:45 AM to 10:00 AM UTC
+    - cron: '*/30 3-10 * * 1-5'
+  workflow_dispatch: # Manual run button for testing
 
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
       - name: Install Dependencies
         run: |
-          pip install pandas yfinance requests numpy
+          python -m pip install --upgrade pip
+          pip install yfinance pandas numpy requests
 
-      - name: Run Squeeze Scanner Script
+      - name: Execute Scanner Engine
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
