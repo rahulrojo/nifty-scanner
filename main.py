@@ -53,13 +53,11 @@ def resample_to_nse_30m(df_5m):
     """5-min data ko NSE 09:15 AM timing par 30-min candles me resample karta hai"""
     df = df_5m.copy()
     
-    # IST Timezone handling
     if df.index.tzinfo is not None:
         df.index = df.index.tz_convert('Asia/Kolkata')
     else:
         df.index = df.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
 
-    # 15m offset alignment for NSE 09:15 start
     resampled = df.resample('30min', offset='15min').agg({
         'Open': 'first',
         'High': 'max',
@@ -72,8 +70,8 @@ def resample_to_nse_30m(df_5m):
 
 def analyze_symbol_for_today(symbol):
     try:
-        # Download 5m data to build exact NSE 30m candles
-        df_5m = yf.download(symbol, period="5d", interval="5m", progress=False)
+        # Fetch 1 month of 5m data for proper EMA warmup (250+ 30M bars)
+        df_5m = yf.download(symbol, period="1mo", interval="5m", progress=False)
         if df_5m.empty:
             return []
 
@@ -81,9 +79,10 @@ def analyze_symbol_for_today(symbol):
             df_5m.columns = df_5m.columns.get_level_values(0)
 
         df = resample_to_nse_30m(df_5m)
-        if len(df) < 60:
+        if len(df) < 100:
             return []
 
+        # Indicators Calculation
         df['EMA_Fast'] = calculate_ema(df['Close'], 9)
         df['EMA_Slow'] = calculate_ema(df['Close'], 21)
         df['EMA_Trend'] = calculate_ema(df['Close'], 50)
@@ -111,7 +110,8 @@ def analyze_symbol_for_today(symbol):
 
         alerts = []
 
-        for i in range(50, len(df)):
+        # Skip first 80 bars for EMA Warmup
+        for i in range(80, len(df)):
             row = df.iloc[i]
             ist_time = df.index[i]
             candle_date = ist_time.date()
@@ -193,7 +193,7 @@ def analyze_symbol_for_today(symbol):
 
 def main():
     if SEND_TEST_MSG:
-        send_telegram_message("🤖 *Scanning All 30M Signals (NSE Aligned)...*")
+        send_telegram_message("🤖 *Scanning All 30M Signals (Warmup Fixed)...*")
 
     print("Scanning All 80 Stocks For Today's Signals...")
     total_alerts = 0
