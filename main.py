@@ -49,40 +49,38 @@ def send_telegram_message(message):
 def calculate_ema(series, length):
     return series.ewm(span=length, adjust=False).mean()
 
-def create_nse_30m_candles(df_5m):
-    """5-min data ko strictly TradingView NSE 30M session bars me group karta hai"""
-    if df_5m.empty:
+def create_nse_30m_candles(df_15m):
+    """15-min data (60 days) ko exact TradingView NSE 30M bars mein group karta hai"""
+    if df_15m.empty:
         return pd.DataFrame()
     
-    df = df_5m.copy()
+    df = df_15m.copy()
     if df.index.tzinfo is not None:
         df.index = df.index.tz_convert('Asia/Kolkata')
     else:
         df.index = df.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
-        
-    df = df.between_time('09:15', '15:30')
 
-    def get_bar_time(ts):
+    def get_30m_label(ts):
         t = ts.strftime('%H:%M')
-        if '09:15' <= t < '09:45': return '09:15'
-        elif '09:45' <= t < '10:15': return '09:45'
-        elif '10:15' <= t < '10:45': return '10:15'
-        elif '10:45' <= t < '11:15': return '10:45'
-        elif '11:15' <= t < '11:45': return '11:15'
-        elif '11:45' <= t < '12:15': return '11:45'
-        elif '12:15' <= t < '12:45': return '12:15'
-        elif '12:45' <= t < '13:15': return '12:45'
-        elif '13:15' <= t < '13:45': return '13:15'
-        elif '13:45' <= t < '14:15': return '13:45'
-        elif '14:15' <= t < '14:45': return '14:15'
-        elif '14:45' <= t < '15:15': return '14:45'
-        elif '15:15' <= t <= '15:30': return '15:15'
+        if t in ['09:15', '09:30']: return '09:15'
+        elif t in ['09:45', '10:00']: return '09:45'
+        elif t in ['10:15', '10:30']: return '10:15'
+        elif t in ['10:45', '11:00']: return '10:45'
+        elif t in ['11:15', '11:30']: return '11:15'
+        elif t in ['11:45', '12:00']: return '11:45'
+        elif t in ['12:15', '12:30']: return '12:15'
+        elif t in ['12:45', '13:00']: return '12:45'
+        elif t in ['13:15', '13:30']: return '13:15'
+        elif t in ['13:45', '14:00']: return '13:45'
+        elif t in ['14:15', '14:30']: return '14:15'
+        elif t in ['14:45', '15:00']: return '14:45'
+        elif t == '15:15': return '15:15'
         return None
 
     df['Date'] = df.index.date
-    df['BarTime'] = [get_bar_time(ts) for ts in df.index]
+    df['BarTime'] = [get_30m_label(ts) for ts in df.index]
     df = df.dropna(subset=['BarTime'])
-    
+
     grouped = df.groupby(['Date', 'BarTime']).agg({
         'Open': 'first',
         'High': 'max',
@@ -90,25 +88,27 @@ def create_nse_30m_candles(df_5m):
         'Close': 'last',
         'Volume': 'sum'
     }).reset_index()
-    
+
     grouped['Datetime'] = pd.to_datetime(grouped['Date'].astype(str) + ' ' + grouped['BarTime'])
     grouped = grouped.set_index('Datetime').sort_index()
-    
+
     return grouped[['Open', 'High', 'Low', 'Close', 'Volume']]
 
 def analyze_symbol_for_today(symbol):
     try:
-        df_5m = yf.download(symbol, period="1mo", interval="5m", progress=False)
-        if df_5m.empty:
+        # Fetch 60 days of 15m data with raw prices (auto_adjust=False)
+        df_15m = yf.download(symbol, period="60d", interval="15m", auto_adjust=False, progress=False)
+        if df_15m.empty:
             return []
 
-        if isinstance(df_5m.columns, pd.MultiIndex):
-            df_5m.columns = df_5m.columns.get_level_values(0)
+        if isinstance(df_15m.columns, pd.MultiIndex):
+            df_15m.columns = df_15m.columns.get_level_values(0)
 
-        df = create_nse_30m_candles(df_5m)
-        if len(df) < 60:
+        df = create_nse_30m_candles(df_15m)
+        if len(df) < 150:
             return []
 
+        # EMA Calculation over 750+ 30M candles
         df['EMA_Fast'] = calculate_ema(df['Close'], 9)
         df['EMA_Slow'] = calculate_ema(df['Close'], 21)
         df['EMA_Trend'] = calculate_ema(df['Close'], 50)
@@ -140,7 +140,8 @@ def analyze_symbol_for_today(symbol):
 
         alerts = []
 
-        for i in range(50, len(df)):
+        # Skip first 100 bars for EMA convergence
+        for i in range(100, len(df)):
             row = df.iloc[i]
             ist_time = df.index[i]
             candle_date = ist_time.date()
@@ -249,7 +250,7 @@ def analyze_symbol_for_today(symbol):
 
 def main():
     if SEND_TEST_MSG:
-        send_telegram_message("🤖 *Scanning All 30M Signals (Exact NSE Session Bins)...*")
+        send_telegram_message("🤖 *Scanning All 30M Signals (60D Warmup Fixed)...*")
 
     print("Scanning All 80 Stocks For Today's Signals...")
     total_alerts = 0
