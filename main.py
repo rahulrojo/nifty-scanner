@@ -9,7 +9,7 @@ import pytz
 # ==========================================
 # CONFIGURATION SETTINGS
 # ==========================================
-SEND_TEST_MSG = False  # Set to True for testing setup, False for regular runs
+SEND_TEST_MSG = False  # Set to True for testing setup, False for production
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -49,24 +49,52 @@ def send_telegram_message(message):
 def calculate_ema(series, length):
     return series.ewm(span=length, adjust=False).mean()
 
-def resample_to_nse_30m(df_5m):
-    """5-min data ko 09:15 AM offset par 30-min candles me convert karta hai"""
-    df = df_5m.copy()
+def create_nse_30m_candles(df_5m):
+    """5-min data ko strictly TradingView NSE 30M session bars me group karta hai"""
+    if df_5m.empty:
+        return pd.DataFrame()
     
+    df = df_5m.copy()
     if df.index.tzinfo is not None:
         df.index = df.index.tz_convert('Asia/Kolkata')
     else:
         df.index = df.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
+        
+    df = df.between_time('09:15', '15:30')
 
-    resampled = df.resample('30min', offset='15min').agg({
+    def get_bar_time(ts):
+        t = ts.strftime('%H:%M')
+        if '09:15' <= t < '09:45': return '09:15'
+        elif '09:45' <= t < '10:15': return '09:45'
+        elif '10:15' <= t < '10:45': return '10:15'
+        elif '10:45' <= t < '11:15': return '10:45'
+        elif '11:15' <= t < '11:45': return '11:15'
+        elif '11:45' <= t < '12:15': return '11:45'
+        elif '12:15' <= t < '12:45': return '12:15'
+        elif '12:45' <= t < '13:15': return '12:45'
+        elif '13:15' <= t < '13:45': return '13:15'
+        elif '13:45' <= t < '14:15': return '13:45'
+        elif '14:15' <= t < '14:45': return '14:15'
+        elif '14:45' <= t < '15:15': return '14:45'
+        elif '15:15' <= t <= '15:30': return '15:15'
+        return None
+
+    df['Date'] = df.index.date
+    df['BarTime'] = [get_bar_time(ts) for ts in df.index]
+    df = df.dropna(subset=['BarTime'])
+    
+    grouped = df.groupby(['Date', 'BarTime']).agg({
         'Open': 'first',
         'High': 'max',
         'Low': 'min',
         'Close': 'last',
         'Volume': 'sum'
-    }).dropna()
+    }).reset_index()
     
-    return resampled
+    grouped['Datetime'] = pd.to_datetime(grouped['Date'].astype(str) + ' ' + grouped['BarTime'])
+    grouped = grouped.set_index('Datetime').sort_index()
+    
+    return grouped[['Open', 'High', 'Low', 'Close', 'Volume']]
 
 def analyze_symbol_for_today(symbol):
     try:
@@ -77,11 +105,10 @@ def analyze_symbol_for_today(symbol):
         if isinstance(df_5m.columns, pd.MultiIndex):
             df_5m.columns = df_5m.columns.get_level_values(0)
 
-        df = resample_to_nse_30m(df_5m)
+        df = create_nse_30m_candles(df_5m)
         if len(df) < 60:
             return []
 
-        # Indicators
         df['EMA_Fast'] = calculate_ema(df['Close'], 9)
         df['EMA_Slow'] = calculate_ema(df['Close'], 21)
         df['EMA_Trend'] = calculate_ema(df['Close'], 50)
@@ -103,7 +130,6 @@ def analyze_symbol_for_today(symbol):
         waitCount = 0
         maxWaitBars = 4
 
-        # Position Lifecycle Management
         in_position = False
         pos_type = None
         sl_price = 0.0
@@ -120,12 +146,10 @@ def analyze_symbol_for_today(symbol):
             candle_date = ist_time.date()
             prev_date = df.index[i-1].date() if i > 0 else candle_date
 
-            # 1. Reset Position on New Day (Intraday Close Simulation)
             if candle_date != prev_date and in_position:
                 in_position = False
                 pos_type = None
 
-            # 2. Check Stop-Loss / Target Hit Exits
             if in_position:
                 if pos_type == 'CE':
                     if float(row['Low']) <= sl_price or float(row['High']) >= tp_price:
@@ -136,7 +160,6 @@ def analyze_symbol_for_today(symbol):
                         in_position = False
                         pos_type = None
 
-            # 3. Trigger Wait States
             if row['CE_Condition'] and not waitingCE and not in_position:
                 rangeHigh = float(row['High'])
                 rangeLow = float(row['Low'])
@@ -166,7 +189,6 @@ def analyze_symbol_for_today(symbol):
             if waitingPE and (float(row['Close']) > rangeHigh):
                 waitingPE = False
 
-            # 4. Generate Alert if Signal belongs to TODAY
             if candle_date == today_date:
                 clean_symbol = symbol.replace(".NS", "").replace("^", "")
                 last_price = round(float(row['Close']), 2)
@@ -204,7 +226,6 @@ def analyze_symbol_for_today(symbol):
                         )
                         alerts.append(msg)
 
-            # 5. Lock Position State
             if confirmedCE:
                 in_position = True
                 pos_type = 'CE'
@@ -228,7 +249,7 @@ def analyze_symbol_for_today(symbol):
 
 def main():
     if SEND_TEST_MSG:
-        send_telegram_message("🤖 *Scanning All 30M Signals (SL/TP Lifecycle Fixed)...*")
+        send_telegram_message("🤖 *Scanning All 30M Signals (Exact NSE Session Bins)...*")
 
     print("Scanning All 80 Stocks For Today's Signals...")
     total_alerts = 0
