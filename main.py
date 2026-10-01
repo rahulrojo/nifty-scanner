@@ -7,15 +7,13 @@ import numpy as np
 # ==========================================
 # CONFIGURATION SETTINGS
 # ==========================================
-# Test message flag (Test hone ke baad isko False kar dena)
-SEND_TEST_MSG = True  
+SEND_TEST_MSG = False  # Test ho gaya ho toh False rakhein
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Top 80 High Volatility Option Trading Stocks & Indices (Yahoo Finance Tickers)
 SYMBOLS = [
-    "^NSEI", "^NSEBANK", "NIFTY_FIN_SERVICE.NS", "NIFTY_MID_SELECT.NS", # Indices
+    "^NSEI", "^NSEBANK", "NIFTY_FIN_SERVICE.NS", "NIFTY_MID_SELECT.NS",
     "RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS",
     "INFY.NS", "TCS.NS", "LT.NS", "BHARTIARTL.NS", "TATAMOTORS.NS", "TATASTEEL.NS",
     "MARUTI.NS", "BAJFINANCE.NS", "HINDUNILVR.NS", "ADANIENT.NS", "ADANIPORTS.NS",
@@ -32,9 +30,8 @@ SYMBOLS = [
 ]
 
 def send_telegram_message(message):
-    """Telegram par text alert bhejne ke liye function"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram Token ya Chat ID missing hai Secrets me!")
+        print("Telegram Secrets Missing!")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -45,20 +42,18 @@ def send_telegram_message(message):
     try:
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print(f"Telegram Message Error: {e}")
+        print(f"Telegram Error: {e}")
 
 def calculate_ema(series, length):
     return series.ewm(span=length, adjust=False).mean()
 
 def analyze_symbol(symbol):
-    """Romy 9.5 Master Breakout Engine (30M) Logic"""
     try:
-        # Download last 5 days data in 30M timeframe
-        df = yf.download(symbol, period="5d", interval="30m", progress=False)
+        # Fetch 30m data
+        df = yf.download(symbol, period="7d", interval="30m", progress=False)
         if df.empty or len(df) < 60:
             return None
 
-        # Multi-index fix if yfinance returns multi-index columns
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
@@ -70,39 +65,38 @@ def analyze_symbol(symbol):
         df['CandleRange'] = df['High'] - df['Low']
         df['IsStrong'] = df['CandleBody'] > (df['CandleRange'] * 0.4)
 
-        # Crossover Detection
         df['EMACrossOver'] = (df['EMA_Fast'] > df['EMA_Slow']) & (df['EMA_Fast'].shift(1) <= df['EMA_Slow'].shift(1))
         df['EMACrossUnder'] = (df['EMA_Fast'] < df['EMA_Slow']) & (df['EMA_Fast'].shift(1) >= df['EMA_Slow'].shift(1))
 
-        # Raw Conditions
         df['CE_Condition'] = df['EMACrossOver'] & (df['Close'] > df['EMA_Trend']) & (df['Close'] > df['Open']) & df['IsStrong']
         df['PE_Condition'] = df['EMACrossUnder'] & (df['Close'] < df['EMA_Trend']) & (df['Close'] < df['Open']) & df['IsStrong']
 
-        # State Engine simulation over candles
+        # State Machine Simulation
         waitingCE = False
         waitingPE = False
         rangeHigh = 0.0
         rangeLow = 0.0
         waitCount = 0
         maxWaitBars = 4
+        in_position = False
 
-        alerts = []
+        # Target index: -2 (Strictly LAST COMPLETED CANDLE, ignoring live running candle)
+        target_idx = len(df) - 2
 
-        for i in range(50, len(df)):
+        for i in range(50, len(df) - 1):
             row = df.iloc[i]
 
-            # CE Wait Trigger
-            if row['CE_Condition'] and not waitingCE:
-                rangeHigh = row['High']
-                rangeLow = row['Low']
+            # Trigger Wait States (Only if not already in position)
+            if row['CE_Condition'] and not waitingCE and not in_position:
+                rangeHigh = float(row['High'])
+                rangeLow = float(row['Low'])
                 waitingCE = True
                 waitingPE = False
                 waitCount = 0
 
-            # PE Wait Trigger
-            elif row['PE_Condition'] and not waitingPE:
-                rangeHigh = row['High']
-                rangeLow = row['Low']
+            elif row['PE_Condition'] and not waitingPE and not in_position:
+                rangeHigh = float(row['High'])
+                rangeLow = float(row['Low'])
                 waitingPE = True
                 waitingCE = False
                 waitCount = 0
@@ -115,21 +109,21 @@ def analyze_symbol(symbol):
                 waitingPE = False
 
             # Confirmations
-            confirmedCE = waitingCE and row['Close'] > rangeHigh
-            confirmedPE = waitingPE and row['Close'] < rangeLow
+            confirmedCE = waitingCE and (float(row['Close']) > rangeHigh) and not in_position
+            confirmedPE = waitingPE and (float(row['Close']) < rangeLow) and not in_position
 
             # Invalidation
-            if waitingCE and row['Close'] < rangeLow:
+            if waitingCE and (float(row['Close']) < rangeLow):
                 waitingCE = False
-            if waitingPE and row['Close'] > rangeHigh:
+            if waitingPE and (float(row['Close']) > rangeHigh):
                 waitingPE = False
 
-            # Trigger Alert on the latest completed candle
-            if i == len(df) - 1:
+            # Check if alert belongs strictly to the last closed 30M bar
+            if i == target_idx:
                 clean_symbol = symbol.replace(".NS", "").replace("^", "")
                 last_price = round(float(row['Close']), 2)
 
-                # Time formatting to IST (Indian Standard Time)
+                # Format IST Time
                 raw_time = df.index[i]
                 try:
                     if raw_time.tzinfo is not None:
@@ -147,14 +141,13 @@ def analyze_symbol(symbol):
                     msg = (
                         f"🚀 *ROMY 9.5: CE BUY NOW*\n\n"
                         f"📌 *Symbol:* {clean_symbol}\n"
-                        f"⏰ *Timeframe:* 30M\n"
+                        f"⏰ *Timeframe:* 30M (Closed Bar)\n"
                         f"🕐 *Candle Time:* {candle_time_str}\n"
                         f"💵 *Entry Price:* ₹{last_price}\n"
                         f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
                         f"🎯 *Target (TP 1:1.5):* ₹{tp}\n"
                     )
-                    alerts.append(msg)
-                    waitingCE = False
+                    return msg
 
                 elif confirmedPE:
                     sl = round(rangeHigh, 2)
@@ -163,31 +156,34 @@ def analyze_symbol(symbol):
                     msg = (
                         f"💥 *ROMY 9.5: PE BUY NOW*\n\n"
                         f"📌 *Symbol:* {clean_symbol}\n"
-                        f"⏰ *Timeframe:* 30M\n"
+                        f"⏰ *Timeframe:* 30M (Closed Bar)\n"
                         f"🕐 *Candle Time:* {candle_time_str}\n"
                         f"💵 *Entry Price:* ₹{last_price}\n"
                         f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
                         f"🎯 *Target (TP 1:1.5):* ₹{tp}\n"
                     )
-                    alerts.append(msg)
-                    waitingPE = False
+                    return msg
 
-        return alerts
+            if confirmedCE or confirmedPE:
+                in_position = True
+                waitingCE = False
+                waitingPE = False
+
+        return None
     except Exception as e:
-        print(f"Error checking {symbol}: {e}")
+        print(f"Error analyzing {symbol}: {e}")
         return None
 
 def main():
     if SEND_TEST_MSG:
-        send_telegram_message("🤖 *Romy 9.5 Engine Test Alert*\n\nBot start ho chuka hai aur 30M Timeframe Scan kar raha hai!")
+        send_telegram_message("🤖 *Romy 9.5 Scanner Active (Strict Closed Candle Mode)*")
 
-    print("Scanning Top 80 Option Stocks & Indices...")
+    print("Scanning Top 80 Option Symbols...")
     for symbol in SYMBOLS:
-        alerts = analyze_symbol(symbol)
-        if alerts:
-            for alert_msg in alerts:
-                send_telegram_message(alert_msg)
-                print(f"Alert Sent for {symbol}!")
+        alert_msg = analyze_symbol(symbol)
+        if alert_msg:
+            send_telegram_message(alert_msg)
+            print(f"Alert Sent for {symbol}!")
 
 if __name__ == "__main__":
     main()
