@@ -9,12 +9,11 @@ import pytz
 # ==========================================
 # CONFIGURATION SETTINGS
 # ==========================================
-SEND_TEST_MSG = False  # Test ho gaya ho toh False hi rakhein
+SEND_TEST_MSG = False  # Set to False after testing
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Top 80 High Volatility Option Trading Stocks & Indices
 SYMBOLS = [
     "^NSEI", "^NSEBANK", "NIFTY_FIN_SERVICE.NS", "NIFTY_MID_SELECT.NS",
     "RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS",
@@ -50,15 +49,40 @@ def send_telegram_message(message):
 def calculate_ema(series, length):
     return series.ewm(span=length, adjust=False).mean()
 
+def resample_to_nse_30m(df_5m):
+    """5-min data ko NSE 09:15 AM timing par 30-min candles me resample karta hai"""
+    df = df_5m.copy()
+    
+    # IST Timezone handling
+    if df.index.tzinfo is not None:
+        df.index = df.index.tz_convert('Asia/Kolkata')
+    else:
+        df.index = df.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
+
+    # 15m offset alignment for NSE 09:15 start
+    resampled = df.resample('30min', offset='15min').agg({
+        'Open': 'first',
+        'High': 'max',
+        'Low': 'min',
+        'Close': 'last',
+        'Volume': 'sum'
+    }).dropna()
+    
+    return resampled
+
 def analyze_symbol_for_today(symbol):
     try:
-        # Fetch last 5 days 30m data
-        df = yf.download(symbol, period="5d", interval="30m", progress=False)
-        if df.empty or len(df) < 60:
+        # Download 5m data to build exact NSE 30m candles
+        df_5m = yf.download(symbol, period="5d", interval="5m", progress=False)
+        if df_5m.empty:
             return []
 
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        if isinstance(df_5m.columns, pd.MultiIndex):
+            df_5m.columns = df_5m.columns.get_level_values(0)
+
+        df = resample_to_nse_30m(df_5m)
+        if len(df) < 60:
+            return []
 
         df['EMA_Fast'] = calculate_ema(df['Close'], 9)
         df['EMA_Slow'] = calculate_ema(df['Close'], 21)
@@ -89,14 +113,7 @@ def analyze_symbol_for_today(symbol):
 
         for i in range(50, len(df)):
             row = df.iloc[i]
-
-            # Convert index to IST
-            raw_time = df.index[i]
-            if raw_time.tzinfo is not None:
-                ist_time = raw_time.tz_convert('Asia/Kolkata')
-            else:
-                ist_time = raw_time.tz_localize('UTC').tz_convert('Asia/Kolkata')
-
+            ist_time = df.index[i]
             candle_date = ist_time.date()
 
             # Trigger Wait States
@@ -129,7 +146,6 @@ def analyze_symbol_for_today(symbol):
             if waitingPE and (float(row['Close']) > rangeHigh):
                 waitingPE = False
 
-            # Strict Filter: Only select signals generated TODAY
             if candle_date == today_date:
                 clean_symbol = symbol.replace(".NS", "").replace("^", "")
                 last_price = round(float(row['Close']), 2)
@@ -142,7 +158,7 @@ def analyze_symbol_for_today(symbol):
                     msg = (
                         f"🚀 *ROMY 9.5: TODAY'S CE BUY SIGNAL*\n\n"
                         f"📌 *Symbol:* {clean_symbol}\n"
-                        f"⏰ *Timeframe:* 30M\n"
+                        f"⏰ *Timeframe:* 30M (NSE Session)\n"
                         f"🕐 *Candle Time:* {candle_time_str}\n"
                         f"💵 *Entry Price:* ₹{last_price}\n"
                         f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
@@ -157,7 +173,7 @@ def analyze_symbol_for_today(symbol):
                     msg = (
                         f"💥 *ROMY 9.5: TODAY'S PE BUY SIGNAL*\n\n"
                         f"📌 *Symbol:* {clean_symbol}\n"
-                        f"⏰ *Timeframe:* 30M\n"
+                        f"⏰ *Timeframe:* 30M (NSE Session)\n"
                         f"🕐 *Candle Time:* {candle_time_str}\n"
                         f"💵 *Entry Price:* ₹{last_price}\n"
                         f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
@@ -177,7 +193,7 @@ def analyze_symbol_for_today(symbol):
 
 def main():
     if SEND_TEST_MSG:
-        send_telegram_message("🤖 *Scanning All 30M Signals For Today...*")
+        send_telegram_message("🤖 *Scanning All 30M Signals (NSE Aligned)...*")
 
     print("Scanning All 80 Stocks For Today's Signals...")
     total_alerts = 0
