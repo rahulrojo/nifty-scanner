@@ -3,15 +3,18 @@ import requests
 import yfinance as yf
 import pandas as pd
 import numpy as np
+from datetime import datetime
+import pytz
 
 # ==========================================
 # CONFIGURATION SETTINGS
 # ==========================================
-SEND_TEST_MSG = False  # Test ho gaya ho toh False rakhein
+SEND_TEST_MSG = False  # Test ho gaya ho toh False hi rakhein
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
+# Top 80 High Volatility Option Trading Stocks & Indices
 SYMBOLS = [
     "^NSEI", "^NSEBANK", "NIFTY_FIN_SERVICE.NS", "NIFTY_MID_SELECT.NS",
     "RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS",
@@ -47,12 +50,12 @@ def send_telegram_message(message):
 def calculate_ema(series, length):
     return series.ewm(span=length, adjust=False).mean()
 
-def analyze_symbol(symbol):
+def analyze_symbol_for_today(symbol):
     try:
-        # Fetch 30m data
-        df = yf.download(symbol, period="7d", interval="30m", progress=False)
+        # Fetch last 5 days 30m data
+        df = yf.download(symbol, period="5d", interval="30m", progress=False)
         if df.empty or len(df) < 60:
-            return None
+            return []
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
@@ -71,7 +74,6 @@ def analyze_symbol(symbol):
         df['CE_Condition'] = df['EMACrossOver'] & (df['Close'] > df['EMA_Trend']) & (df['Close'] > df['Open']) & df['IsStrong']
         df['PE_Condition'] = df['EMACrossUnder'] & (df['Close'] < df['EMA_Trend']) & (df['Close'] < df['Open']) & df['IsStrong']
 
-        # State Machine Simulation
         waitingCE = False
         waitingPE = False
         rangeHigh = 0.0
@@ -80,13 +82,24 @@ def analyze_symbol(symbol):
         maxWaitBars = 4
         in_position = False
 
-        # Target index: -2 (Strictly LAST COMPLETED CANDLE, ignoring live running candle)
-        target_idx = len(df) - 2
+        ist_tz = pytz.timezone('Asia/Kolkata')
+        today_date = datetime.now(ist_tz).date()
 
-        for i in range(50, len(df) - 1):
+        alerts = []
+
+        for i in range(50, len(df)):
             row = df.iloc[i]
 
-            # Trigger Wait States (Only if not already in position)
+            # Convert index to IST
+            raw_time = df.index[i]
+            if raw_time.tzinfo is not None:
+                ist_time = raw_time.tz_convert('Asia/Kolkata')
+            else:
+                ist_time = raw_time.tz_localize('UTC').tz_convert('Asia/Kolkata')
+
+            candle_date = ist_time.date()
+
+            # Trigger Wait States
             if row['CE_Condition'] and not waitingCE and not in_position:
                 rangeHigh = float(row['High'])
                 rangeLow = float(row['Low'])
@@ -108,82 +121,74 @@ def analyze_symbol(symbol):
                 waitingCE = False
                 waitingPE = False
 
-            # Confirmations
             confirmedCE = waitingCE and (float(row['Close']) > rangeHigh) and not in_position
             confirmedPE = waitingPE and (float(row['Close']) < rangeLow) and not in_position
 
-            # Invalidation
             if waitingCE and (float(row['Close']) < rangeLow):
                 waitingCE = False
             if waitingPE and (float(row['Close']) > rangeHigh):
                 waitingPE = False
 
-            # Check if alert belongs strictly to the last closed 30M bar
-            if i == target_idx:
+            # Strict Filter: Only select signals generated TODAY
+            if candle_date == today_date:
                 clean_symbol = symbol.replace(".NS", "").replace("^", "")
                 last_price = round(float(row['Close']), 2)
-
-                # Format IST Time
-                raw_time = df.index[i]
-                try:
-                    if raw_time.tzinfo is not None:
-                        ist_time = raw_time.tz_convert('Asia/Kolkata')
-                    else:
-                        ist_time = raw_time.tz_localize('UTC').tz_convert('Asia/Kolkata')
-                    candle_time_str = ist_time.strftime('%d-%b %I:%M %p')
-                except Exception:
-                    candle_time_str = str(raw_time)
+                candle_time_str = ist_time.strftime('%d-%b %I:%M %p')
 
                 if confirmedCE:
                     sl = round(rangeLow, 2)
                     risk = last_price - sl
                     tp = round(last_price + (risk * 1.5), 2)
                     msg = (
-                        f"🚀 *ROMY 9.5: CE BUY NOW*\n\n"
+                        f"🚀 *ROMY 9.5: TODAY'S CE BUY SIGNAL*\n\n"
                         f"📌 *Symbol:* {clean_symbol}\n"
-                        f"⏰ *Timeframe:* 30M (Closed Bar)\n"
+                        f"⏰ *Timeframe:* 30M\n"
                         f"🕐 *Candle Time:* {candle_time_str}\n"
                         f"💵 *Entry Price:* ₹{last_price}\n"
                         f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
                         f"🎯 *Target (TP 1:1.5):* ₹{tp}\n"
                     )
-                    return msg
+                    alerts.append(msg)
 
                 elif confirmedPE:
                     sl = round(rangeHigh, 2)
                     risk = sl - last_price
                     tp = round(last_price - (risk * 1.5), 2)
                     msg = (
-                        f"💥 *ROMY 9.5: PE BUY NOW*\n\n"
+                        f"💥 *ROMY 9.5: TODAY'S PE BUY SIGNAL*\n\n"
                         f"📌 *Symbol:* {clean_symbol}\n"
-                        f"⏰ *Timeframe:* 30M (Closed Bar)\n"
+                        f"⏰ *Timeframe:* 30M\n"
                         f"🕐 *Candle Time:* {candle_time_str}\n"
                         f"💵 *Entry Price:* ₹{last_price}\n"
                         f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
                         f"🎯 *Target (TP 1:1.5):* ₹{tp}\n"
                     )
-                    return msg
+                    alerts.append(msg)
 
             if confirmedCE or confirmedPE:
                 in_position = True
                 waitingCE = False
                 waitingPE = False
 
-        return None
+        return alerts
     except Exception as e:
         print(f"Error analyzing {symbol}: {e}")
-        return None
+        return []
 
 def main():
     if SEND_TEST_MSG:
-        send_telegram_message("🤖 *Romy 9.5 Scanner Active (Strict Closed Candle Mode)*")
+        send_telegram_message("🤖 *Scanning All 30M Signals For Today...*")
 
-    print("Scanning Top 80 Option Symbols...")
+    print("Scanning All 80 Stocks For Today's Signals...")
+    total_alerts = 0
     for symbol in SYMBOLS:
-        alert_msg = analyze_symbol(symbol)
-        if alert_msg:
+        alerts = analyze_symbol_for_today(symbol)
+        for alert_msg in alerts:
             send_telegram_message(alert_msg)
-            print(f"Alert Sent for {symbol}!")
+            total_alerts += 1
+            print(f"Today's Alert Sent for {symbol}!")
+
+    print(f"Done! Total signals sent for today: {total_alerts}")
 
 if __name__ == "__main__":
     main()
