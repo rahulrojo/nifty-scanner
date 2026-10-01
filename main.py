@@ -9,7 +9,7 @@ import pytz
 # ==========================================
 # CONFIGURATION SETTINGS
 # ==========================================
-SEND_TEST_MSG = False  # Set to False after testing
+SEND_TEST_MSG = False  # Set to True for testing setup, False for regular runs
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -50,7 +50,7 @@ def calculate_ema(series, length):
     return series.ewm(span=length, adjust=False).mean()
 
 def resample_to_nse_30m(df_5m):
-    """5-min data ko NSE 09:15 AM timing par 30-min candles me resample karta hai"""
+    """5-min data ko 09:15 AM offset par 30-min candles me convert karta hai"""
     df = df_5m.copy()
     
     if df.index.tzinfo is not None:
@@ -70,7 +70,6 @@ def resample_to_nse_30m(df_5m):
 
 def analyze_symbol_for_today(symbol):
     try:
-        # Fetch 1 month of 5m data for proper EMA warmup (250+ 30M bars)
         df_5m = yf.download(symbol, period="1mo", interval="5m", progress=False)
         if df_5m.empty:
             return []
@@ -79,10 +78,10 @@ def analyze_symbol_for_today(symbol):
             df_5m.columns = df_5m.columns.get_level_values(0)
 
         df = resample_to_nse_30m(df_5m)
-        if len(df) < 100:
+        if len(df) < 60:
             return []
 
-        # Indicators Calculation
+        # Indicators
         df['EMA_Fast'] = calculate_ema(df['Close'], 9)
         df['EMA_Slow'] = calculate_ema(df['Close'], 21)
         df['EMA_Trend'] = calculate_ema(df['Close'], 50)
@@ -103,20 +102,41 @@ def analyze_symbol_for_today(symbol):
         rangeLow = 0.0
         waitCount = 0
         maxWaitBars = 4
+
+        # Position Lifecycle Management
         in_position = False
+        pos_type = None
+        sl_price = 0.0
+        tp_price = 0.0
 
         ist_tz = pytz.timezone('Asia/Kolkata')
         today_date = datetime.now(ist_tz).date()
 
         alerts = []
 
-        # Skip first 80 bars for EMA Warmup
-        for i in range(80, len(df)):
+        for i in range(50, len(df)):
             row = df.iloc[i]
             ist_time = df.index[i]
             candle_date = ist_time.date()
+            prev_date = df.index[i-1].date() if i > 0 else candle_date
 
-            # Trigger Wait States
+            # 1. Reset Position on New Day (Intraday Close Simulation)
+            if candle_date != prev_date and in_position:
+                in_position = False
+                pos_type = None
+
+            # 2. Check Stop-Loss / Target Hit Exits
+            if in_position:
+                if pos_type == 'CE':
+                    if float(row['Low']) <= sl_price or float(row['High']) >= tp_price:
+                        in_position = False
+                        pos_type = None
+                elif pos_type == 'PE':
+                    if float(row['High']) >= sl_price or float(row['Low']) <= tp_price:
+                        in_position = False
+                        pos_type = None
+
+            # 3. Trigger Wait States
             if row['CE_Condition'] and not waitingCE and not in_position:
                 rangeHigh = float(row['High'])
                 rangeLow = float(row['Low'])
@@ -146,6 +166,7 @@ def analyze_symbol_for_today(symbol):
             if waitingPE and (float(row['Close']) > rangeHigh):
                 waitingPE = False
 
+            # 4. Generate Alert if Signal belongs to TODAY
             if candle_date == today_date:
                 clean_symbol = symbol.replace(".NS", "").replace("^", "")
                 last_price = round(float(row['Close']), 2)
@@ -154,36 +175,50 @@ def analyze_symbol_for_today(symbol):
                 if confirmedCE:
                     sl = round(rangeLow, 2)
                     risk = last_price - sl
-                    tp = round(last_price + (risk * 1.5), 2)
-                    msg = (
-                        f"🚀 *ROMY 9.5: TODAY'S CE BUY SIGNAL*\n\n"
-                        f"📌 *Symbol:* {clean_symbol}\n"
-                        f"⏰ *Timeframe:* 30M (NSE Session)\n"
-                        f"🕐 *Candle Time:* {candle_time_str}\n"
-                        f"💵 *Entry Price:* ₹{last_price}\n"
-                        f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
-                        f"🎯 *Target (TP 1:1.5):* ₹{tp}\n"
-                    )
-                    alerts.append(msg)
+                    if risk > 0:
+                        tp = round(last_price + (risk * 1.5), 2)
+                        msg = (
+                            f"🚀 *ROMY 9.5: TODAY'S CE BUY SIGNAL*\n\n"
+                            f"📌 *Symbol:* {clean_symbol}\n"
+                            f"⏰ *Timeframe:* 30M (NSE Session)\n"
+                            f"🕐 *Candle Time:* {candle_time_str}\n"
+                            f"💵 *Entry Price:* ₹{last_price}\n"
+                            f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
+                            f"🎯 *Target (TP 1:1.5):* ₹{tp}\n"
+                        )
+                        alerts.append(msg)
 
                 elif confirmedPE:
                     sl = round(rangeHigh, 2)
                     risk = sl - last_price
-                    tp = round(last_price - (risk * 1.5), 2)
-                    msg = (
-                        f"💥 *ROMY 9.5: TODAY'S PE BUY SIGNAL*\n\n"
-                        f"📌 *Symbol:* {clean_symbol}\n"
-                        f"⏰ *Timeframe:* 30M (NSE Session)\n"
-                        f"🕐 *Candle Time:* {candle_time_str}\n"
-                        f"💵 *Entry Price:* ₹{last_price}\n"
-                        f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
-                        f"🎯 *Target (TP 1:1.5):* ₹{tp}\n"
-                    )
-                    alerts.append(msg)
+                    if risk > 0:
+                        tp = round(last_price - (risk * 1.5), 2)
+                        msg = (
+                            f"💥 *ROMY 9.5: TODAY'S PE BUY SIGNAL*\n\n"
+                            f"📌 *Symbol:* {clean_symbol}\n"
+                            f"⏰ *Timeframe:* 30M (NSE Session)\n"
+                            f"🕐 *Candle Time:* {candle_time_str}\n"
+                            f"💵 *Entry Price:* ₹{last_price}\n"
+                            f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
+                            f"🎯 *Target (TP 1:1.5):* ₹{tp}\n"
+                        )
+                        alerts.append(msg)
 
-            if confirmedCE or confirmedPE:
+            # 5. Lock Position State
+            if confirmedCE:
                 in_position = True
+                pos_type = 'CE'
+                sl_price = rangeLow
+                sl_risk = float(row['Close']) - sl_price
+                tp_price = float(row['Close']) + (sl_risk * 1.5)
                 waitingCE = False
+
+            elif confirmedPE:
+                in_position = True
+                pos_type = 'PE'
+                sl_price = rangeHigh
+                sl_risk = sl_price - float(row['Close'])
+                tp_price = float(row['Close']) - (sl_risk * 1.5)
                 waitingPE = False
 
         return alerts
@@ -193,7 +228,7 @@ def analyze_symbol_for_today(symbol):
 
 def main():
     if SEND_TEST_MSG:
-        send_telegram_message("🤖 *Scanning All 30M Signals (Warmup Fixed)...*")
+        send_telegram_message("🤖 *Scanning All 30M Signals (SL/TP Lifecycle Fixed)...*")
 
     print("Scanning All 80 Stocks For Today's Signals...")
     total_alerts = 0
