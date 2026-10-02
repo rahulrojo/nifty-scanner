@@ -9,7 +9,7 @@ import pytz
 # ==========================================
 # CONFIGURATION SETTINGS
 # ==========================================
-SEND_TEST_MSG = False  # Set to True for testing setup, False for production
+SEND_TEST_MSG = False  # Set to True for testing setup, False for regular runs
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -49,66 +49,27 @@ def send_telegram_message(message):
 def calculate_ema(series, length):
     return series.ewm(span=length, adjust=False).mean()
 
-def create_nse_30m_candles(df_15m):
-    """15-min data (60 days) ko exact TradingView NSE 30M bars mein group karta hai"""
-    if df_15m.empty:
-        return pd.DataFrame()
-    
-    df = df_15m.copy()
-    if df.index.tzinfo is not None:
-        df.index = df.index.tz_convert('Asia/Kolkata')
-    else:
-        df.index = df.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
-
-    def get_30m_label(ts):
-        t = ts.strftime('%H:%M')
-        if t in ['09:15', '09:30']: return '09:15'
-        elif t in ['09:45', '10:00']: return '09:45'
-        elif t in ['10:15', '10:30']: return '10:15'
-        elif t in ['10:45', '11:00']: return '10:45'
-        elif t in ['11:15', '11:30']: return '11:15'
-        elif t in ['11:45', '12:00']: return '11:45'
-        elif t in ['12:15', '12:30']: return '12:15'
-        elif t in ['12:45', '13:00']: return '12:45'
-        elif t in ['13:15', '13:30']: return '13:15'
-        elif t in ['13:45', '14:00']: return '13:45'
-        elif t in ['14:15', '14:30']: return '14:15'
-        elif t in ['14:45', '15:00']: return '14:45'
-        elif t == '15:15': return '15:15'
-        return None
-
-    df['Date'] = df.index.date
-    df['BarTime'] = [get_30m_label(ts) for ts in df.index]
-    df = df.dropna(subset=['BarTime'])
-
-    grouped = df.groupby(['Date', 'BarTime']).agg({
-        'Open': 'first',
-        'High': 'max',
-        'Low': 'min',
-        'Close': 'last',
-        'Volume': 'sum'
-    }).reset_index()
-
-    grouped['Datetime'] = pd.to_datetime(grouped['Date'].astype(str) + ' ' + grouped['BarTime'])
-    grouped = grouped.set_index('Datetime').sort_index()
-
-    return grouped[['Open', 'High', 'Low', 'Close', 'Volume']]
-
 def analyze_symbol_for_today(symbol):
     try:
-        # Fetch 60 days of 15m data with raw prices (auto_adjust=False)
-        df_15m = yf.download(symbol, period="60d", interval="15m", auto_adjust=False, progress=False)
-        if df_15m.empty:
+        # Fetch native 30M candles directly (60 days period for full EMA warmup)
+        df = yf.download(symbol, period="60d", interval="30m", auto_adjust=False, progress=False)
+        if df.empty:
             return []
 
-        if isinstance(df_15m.columns, pd.MultiIndex):
-            df_15m.columns = df_15m.columns.get_level_values(0)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
 
-        df = create_nse_30m_candles(df_15m)
-        if len(df) < 150:
+        df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
+        if len(df) < 100:
             return []
 
-        # EMA Calculation over 750+ 30M candles
+        # Timezone localization to IST
+        if df.index.tzinfo is not None:
+            df.index = df.index.tz_convert('Asia/Kolkata')
+        else:
+            df.index = df.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
+
+        # EMA Calculations
         df['EMA_Fast'] = calculate_ema(df['Close'], 9)
         df['EMA_Slow'] = calculate_ema(df['Close'], 21)
         df['EMA_Trend'] = calculate_ema(df['Close'], 50)
@@ -117,6 +78,7 @@ def analyze_symbol_for_today(symbol):
         df['CandleRange'] = df['High'] - df['Low']
         df['IsStrong'] = df['CandleBody'] > (df['CandleRange'] * 0.4)
 
+        # Crossover Detection
         df['EMACrossOver'] = (df['EMA_Fast'] > df['EMA_Slow']) & (df['EMA_Fast'].shift(1) <= df['EMA_Slow'].shift(1))
         df['EMACrossUnder'] = (df['EMA_Fast'] < df['EMA_Slow']) & (df['EMA_Fast'].shift(1) >= df['EMA_Slow'].shift(1))
 
@@ -140,17 +102,20 @@ def analyze_symbol_for_today(symbol):
 
         alerts = []
 
-        # Skip first 100 bars for EMA convergence
-        for i in range(100, len(df)):
+        for i in range(50, len(df)):
             row = df.iloc[i]
             ist_time = df.index[i]
             candle_date = ist_time.date()
             prev_date = df.index[i-1].date() if i > 0 else candle_date
 
-            if candle_date != prev_date and in_position:
+            # Reset state at market open
+            if candle_date != prev_date:
                 in_position = False
                 pos_type = None
+                waitingCE = False
+                waitingPE = False
 
+            # Position SL/TP check
             if in_position:
                 if pos_type == 'CE':
                     if float(row['Low']) <= sl_price or float(row['High']) >= tp_price:
@@ -161,6 +126,7 @@ def analyze_symbol_for_today(symbol):
                         in_position = False
                         pos_type = None
 
+            # Setup trigger
             if row['CE_Condition'] and not waitingCE and not in_position:
                 rangeHigh = float(row['High'])
                 rangeLow = float(row['Low'])
@@ -190,6 +156,7 @@ def analyze_symbol_for_today(symbol):
             if waitingPE and (float(row['Close']) > rangeHigh):
                 waitingPE = False
 
+            # Send Alert only for TODAY's signals
             if candle_date == today_date:
                 clean_symbol = symbol.replace(".NS", "").replace("^", "")
                 last_price = round(float(row['Close']), 2)
@@ -250,7 +217,7 @@ def analyze_symbol_for_today(symbol):
 
 def main():
     if SEND_TEST_MSG:
-        send_telegram_message("🤖 *Scanning All 30M Signals (60D Warmup Fixed)...*")
+        send_telegram_message("🤖 *Scanning All 30M Signals (Direct Native 30M Fix)...*")
 
     print("Scanning All 80 Stocks For Today's Signals...")
     total_alerts = 0
