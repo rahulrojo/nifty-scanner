@@ -9,7 +9,7 @@ import pytz
 # ==========================================
 # CONFIGURATION SETTINGS
 # ==========================================
-SEND_TEST_MSG = True  # Terminal testing ke liye True rakha hai
+SEND_TEST_MSG = False
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -33,7 +33,7 @@ SYMBOLS = [
 
 def send_telegram_message(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram Secrets Missing! Message not sent to Telegram.")
+        print("Telegram Secrets Missing!")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -49,29 +49,69 @@ def send_telegram_message(message):
 def calculate_ema(series, length):
     return series.ewm(span=length, adjust=False).mean()
 
+def resample_nse_strict_30m(df_5m):
+    """5M data ko strictly NSE 30M Bins (09:15, 09:45, 10:15...) me map karta hai"""
+    if df_5m.empty:
+        return pd.DataFrame()
+
+    df = df_5m.copy()
+    if df.index.tzinfo is not None:
+        df.index = df.index.tz_convert('Asia/Kolkata')
+    else:
+        df.index = df.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
+
+    # Keep strictly NSE session hours
+    df = df.between_time('09:15', '15:29')
+
+    def assign_nse_bin(ts):
+        t = ts.time()
+        minutes_from_open = (t.hour - 9) * 60 + (t.minute - 15)
+        if minutes_from_open < 0:
+            return None
+        
+        bin_idx = minutes_from_open // 30
+        bin_start_mins = 9 * 60 + 15 + (bin_idx * 30)
+        
+        h = bin_start_mins // 60
+        m = bin_start_mins % 60
+        
+        if h > 15 or (h == 15 and m > 15):
+            h, m = 15, 15
+            
+        return f"{h:02d}:{m:02d}"
+
+    df['Date'] = df.index.date
+    df['BinTime'] = [assign_nse_bin(ts) for ts in df.index]
+    df = df.dropna(subset=['BinTime'])
+
+    grouped = df.groupby(['Date', 'BinTime']).agg({
+        'Open': 'first',
+        'High': 'max',
+        'Low': 'min',
+        'Close': 'last',
+        'Volume': 'sum'
+    }).reset_index()
+
+    grouped['Datetime'] = pd.to_datetime(grouped['Date'].astype(str) + ' ' + grouped['BinTime'])
+    grouped = grouped.set_index('Datetime').sort_index()
+
+    return grouped[['Open', 'High', 'Low', 'Close', 'Volume']]
+
 def analyze_symbol_for_today(symbol):
     try:
-        # Fetch 1 month 30m native data (stable API call)
-        df = yf.download(symbol, period="1mo", interval="30m", auto_adjust=False, progress=False)
-        if df.empty:
-            print(f"[{symbol}] Data Empty!")
+        # Fetch 5-minute data (1 month) for exact candle mapping
+        df_5m = yf.download(symbol, period="1mo", interval="5m", auto_adjust=False, progress=False)
+        if df_5m.empty:
             return []
 
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        if isinstance(df_5m.columns, pd.MultiIndex):
+            df_5m.columns = df_5m.columns.get_level_values(0)
 
-        df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
+        df = resample_nse_strict_30m(df_5m)
         if len(df) < 50:
-            print(f"[{symbol}] Insufficient Candles ({len(df)})")
             return []
 
-        # Timezone localization to IST
-        if df.index.tzinfo is not None:
-            df.index = df.index.tz_convert('Asia/Kolkata')
-        else:
-            df.index = df.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
-
-        # EMA Calculations
+        # EMA Indicators
         df['EMA_Fast'] = calculate_ema(df['Close'], 9)
         df['EMA_Slow'] = calculate_ema(df['Close'], 21)
         df['EMA_Trend'] = calculate_ema(df['Close'], 50)
@@ -98,7 +138,7 @@ def analyze_symbol_for_today(symbol):
         sl_price = 0.0
         tp_price = 0.0
 
-        # Auto-detect target date: Use last candle's date if today has no trading data (Holiday/Weekend)
+        # Auto-target last active trading date
         last_data_date = df.index[-1].date()
         target_date = last_data_date
 
@@ -155,7 +195,6 @@ def analyze_symbol_for_today(symbol):
             if waitingPE and (float(row['Close']) > rangeHigh):
                 waitingPE = False
 
-            # Check if signal belongs to target date (Last active session / Today)
             if candle_date == target_date:
                 clean_symbol = symbol.replace(".NS", "").replace("^", "")
                 last_price = round(float(row['Close']), 2)
@@ -215,16 +254,16 @@ def analyze_symbol_for_today(symbol):
         return []
 
 def main():
-    print("Scanning All 80 Stocks For Signals...")
+    print("Scanning All Stocks with Strict NSE 30M Bins...")
     total_alerts = 0
     for symbol in SYMBOLS:
         alerts = analyze_symbol_for_today(symbol)
         for alert_msg in alerts:
             send_telegram_message(alert_msg)
             total_alerts += 1
-            print(f"-> Alert Sent for {symbol}!")
+            print(f"Alert Sent for {symbol}!")
 
-    print(f"\nScan Finished! Total valid signals found: {total_alerts}")
+    print(f"\nScan Finished! Total valid signals: {total_alerts}")
 
 if __name__ == "__main__":
     main()
