@@ -39,18 +39,32 @@ def send_telegram_message(message):
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
-        "parse_mode": "Markdown"
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": False  # Preview enable rakha hai
     }
     try:
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"Telegram Error: {e}")
 
+def get_tradingview_url(clean_symbol):
+    """TradingView ke liye exact symbol URL mapping karta hai"""
+    tv_symbol = clean_symbol
+    if clean_symbol == "NSEI":
+        tv_symbol = "NIFTY"
+    elif clean_symbol == "NSEBANK":
+        tv_symbol = "BANKNIFTY"
+    elif clean_symbol == "NIFTY_FIN_SERVICE":
+        tv_symbol = "FINNIFTY"
+    elif clean_symbol == "NIFTY_MID_SELECT":
+        tv_symbol = "MIDCPNIFTY"
+
+    return f"https://in.tradingview.com/chart/?symbol=NSE%3A{tv_symbol}"
+
 def calculate_ema(series, length):
     return series.ewm(span=length, adjust=False).mean()
 
 def resample_nse_strict_30m(df_5m):
-    """5M data ko strictly NSE 30M Bins (09:15, 09:45, 10:15...) me map karta hai"""
     if df_5m.empty:
         return pd.DataFrame()
 
@@ -60,7 +74,6 @@ def resample_nse_strict_30m(df_5m):
     else:
         df.index = df.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
 
-    # Keep strictly NSE session hours
     df = df.between_time('09:15', '15:29')
 
     def assign_nse_bin(ts):
@@ -99,7 +112,6 @@ def resample_nse_strict_30m(df_5m):
 
 def analyze_symbol_for_today(symbol):
     try:
-        # Fetch 5-minute data (1 month) for exact candle mapping
         df_5m = yf.download(symbol, period="1mo", interval="5m", auto_adjust=False, progress=False)
         if df_5m.empty:
             return []
@@ -111,7 +123,6 @@ def analyze_symbol_for_today(symbol):
         if len(df) < 50:
             return []
 
-        # EMA Indicators
         df['EMA_Fast'] = calculate_ema(df['Close'], 9)
         df['EMA_Slow'] = calculate_ema(df['Close'], 21)
         df['EMA_Trend'] = calculate_ema(df['Close'], 50)
@@ -138,7 +149,6 @@ def analyze_symbol_for_today(symbol):
         sl_price = 0.0
         tp_price = 0.0
 
-        # Auto-target last active trading date
         last_data_date = df.index[-1].date()
         target_date = last_data_date
 
@@ -199,6 +209,7 @@ def analyze_symbol_for_today(symbol):
                 clean_symbol = symbol.replace(".NS", "").replace("^", "")
                 last_price = round(float(row['Close']), 2)
                 candle_time_str = ist_time.strftime('%d-%b %I:%M %p')
+                tv_link = get_tradingview_url(clean_symbol)
 
                 if confirmedCE:
                     sl = round(rangeLow, 2)
@@ -212,7 +223,8 @@ def analyze_symbol_for_today(symbol):
                             f"🕐 *Candle Time:* {candle_time_str}\n"
                             f"💵 *Entry Price:* ₹{last_price}\n"
                             f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
-                            f"🎯 *Target (TP 1:1.5):* ₹{tp}\n"
+                            f"🎯 *Target (TP 1:1.5):* ₹{tp}\n\n"
+                            f"📊 [Open Chart on TradingView]({tv_link})"
                         )
                         alerts.append(msg)
 
@@ -228,7 +240,8 @@ def analyze_symbol_for_today(symbol):
                             f"🕐 *Candle Time:* {candle_time_str}\n"
                             f"💵 *Entry Price:* ₹{last_price}\n"
                             f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
-                            f"🎯 *Target (TP 1:1.5):* ₹{tp}\n"
+                            f"🎯 *Target (TP 1:1.5):* ₹{tp}\n\n"
+                            f"📊 [Open Chart on TradingView]({tv_link})"
                         )
                         alerts.append(msg)
 
@@ -254,7 +267,7 @@ def analyze_symbol_for_today(symbol):
         return []
 
 def main():
-    print("Scanning All Stocks with Strict NSE 30M Bins...")
+    print("Scanning All Stocks with TradingView Direct Links...")
     total_alerts = 0
     for symbol in SYMBOLS:
         alerts = analyze_symbol_for_today(symbol)
