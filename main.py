@@ -9,7 +9,7 @@ import pytz
 # ==========================================
 # CONFIGURATION SETTINGS
 # ==========================================
-SEND_TEST_MSG = False  # Set to True for testing setup, False for regular runs
+SEND_TEST_MSG = True  # Terminal testing ke liye True rakha hai
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -33,7 +33,7 @@ SYMBOLS = [
 
 def send_telegram_message(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram Secrets Missing!")
+        print("Telegram Secrets Missing! Message not sent to Telegram.")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -51,16 +51,18 @@ def calculate_ema(series, length):
 
 def analyze_symbol_for_today(symbol):
     try:
-        # Fetch native 30M candles directly (60 days period for full EMA warmup)
-        df = yf.download(symbol, period="60d", interval="30m", auto_adjust=False, progress=False)
+        # Fetch 1 month 30m native data (stable API call)
+        df = yf.download(symbol, period="1mo", interval="30m", auto_adjust=False, progress=False)
         if df.empty:
+            print(f"[{symbol}] Data Empty!")
             return []
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
         df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
-        if len(df) < 100:
+        if len(df) < 50:
+            print(f"[{symbol}] Insufficient Candles ({len(df)})")
             return []
 
         # Timezone localization to IST
@@ -78,7 +80,6 @@ def analyze_symbol_for_today(symbol):
         df['CandleRange'] = df['High'] - df['Low']
         df['IsStrong'] = df['CandleBody'] > (df['CandleRange'] * 0.4)
 
-        # Crossover Detection
         df['EMACrossOver'] = (df['EMA_Fast'] > df['EMA_Slow']) & (df['EMA_Fast'].shift(1) <= df['EMA_Slow'].shift(1))
         df['EMACrossUnder'] = (df['EMA_Fast'] < df['EMA_Slow']) & (df['EMA_Fast'].shift(1) >= df['EMA_Slow'].shift(1))
 
@@ -97,25 +98,24 @@ def analyze_symbol_for_today(symbol):
         sl_price = 0.0
         tp_price = 0.0
 
-        ist_tz = pytz.timezone('Asia/Kolkata')
-        today_date = datetime.now(ist_tz).date()
+        # Auto-detect target date: Use last candle's date if today has no trading data (Holiday/Weekend)
+        last_data_date = df.index[-1].date()
+        target_date = last_data_date
 
         alerts = []
 
-        for i in range(50, len(df)):
+        for i in range(30, len(df)):
             row = df.iloc[i]
             ist_time = df.index[i]
             candle_date = ist_time.date()
             prev_date = df.index[i-1].date() if i > 0 else candle_date
 
-            # Reset state at market open
             if candle_date != prev_date:
                 in_position = False
                 pos_type = None
                 waitingCE = False
                 waitingPE = False
 
-            # Position SL/TP check
             if in_position:
                 if pos_type == 'CE':
                     if float(row['Low']) <= sl_price or float(row['High']) >= tp_price:
@@ -126,7 +126,6 @@ def analyze_symbol_for_today(symbol):
                         in_position = False
                         pos_type = None
 
-            # Setup trigger
             if row['CE_Condition'] and not waitingCE and not in_position:
                 rangeHigh = float(row['High'])
                 rangeLow = float(row['Low'])
@@ -156,8 +155,8 @@ def analyze_symbol_for_today(symbol):
             if waitingPE and (float(row['Close']) > rangeHigh):
                 waitingPE = False
 
-            # Send Alert only for TODAY's signals
-            if candle_date == today_date:
+            # Check if signal belongs to target date (Last active session / Today)
+            if candle_date == target_date:
                 clean_symbol = symbol.replace(".NS", "").replace("^", "")
                 last_price = round(float(row['Close']), 2)
                 candle_time_str = ist_time.strftime('%d-%b %I:%M %p')
@@ -168,7 +167,7 @@ def analyze_symbol_for_today(symbol):
                     if risk > 0:
                         tp = round(last_price + (risk * 1.5), 2)
                         msg = (
-                            f"🚀 *ROMY 9.5: TODAY'S CE BUY SIGNAL*\n\n"
+                            f"🚀 *ROMY 9.5: CE BUY SIGNAL*\n\n"
                             f"📌 *Symbol:* {clean_symbol}\n"
                             f"⏰ *Timeframe:* 30M (NSE Session)\n"
                             f"🕐 *Candle Time:* {candle_time_str}\n"
@@ -184,7 +183,7 @@ def analyze_symbol_for_today(symbol):
                     if risk > 0:
                         tp = round(last_price - (risk * 1.5), 2)
                         msg = (
-                            f"💥 *ROMY 9.5: TODAY'S PE BUY SIGNAL*\n\n"
+                            f"💥 *ROMY 9.5: PE BUY SIGNAL*\n\n"
                             f"📌 *Symbol:* {clean_symbol}\n"
                             f"⏰ *Timeframe:* 30M (NSE Session)\n"
                             f"🕐 *Candle Time:* {candle_time_str}\n"
@@ -216,19 +215,16 @@ def analyze_symbol_for_today(symbol):
         return []
 
 def main():
-    if SEND_TEST_MSG:
-        send_telegram_message("🤖 *Scanning All 30M Signals (Direct Native 30M Fix)...*")
-
-    print("Scanning All 80 Stocks For Today's Signals...")
+    print("Scanning All 80 Stocks For Signals...")
     total_alerts = 0
     for symbol in SYMBOLS:
         alerts = analyze_symbol_for_today(symbol)
         for alert_msg in alerts:
             send_telegram_message(alert_msg)
             total_alerts += 1
-            print(f"Today's Alert Sent for {symbol}!")
+            print(f"-> Alert Sent for {symbol}!")
 
-    print(f"Done! Total signals sent for today: {total_alerts}")
+    print(f"\nScan Finished! Total valid signals found: {total_alerts}")
 
 if __name__ == "__main__":
     main()
