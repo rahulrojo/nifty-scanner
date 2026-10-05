@@ -1,31 +1,47 @@
-name: Romy 9.5 Master Breakout Bot 30M
+name: Romy 9.5 Telegram Alerts
 
 on:
   schedule:
-    # NSE Market Hours (Mon-Fri 9:15 AM to 3:30 PM IST) -> 3:45 AM to 10:00 AM UTC
-    - cron: '*/30 3-10 * * 1-5'
-  workflow_dispatch: # Manual run button for testing
+    # 30m candle close ke baad (IST = UTC + 5:30)
+    # 9:47 AM se 3:17 PM IST tak, har 30 min
+    - cron: '17,47 4-9 * * 1-5'
+    # 3:32 PM IST (last 15 min candle close)
+    - cron: '2 10 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: romy-alerts
+  cancel-in-progress: false
 
 jobs:
-  run-scanner:
+  scan:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install yfinance pandas numpy requests
+      - name: Install packages
+        run: pip install yfinance pandas requests
 
-      - name: Execute Scanner Engine
+      - name: Run strategy
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TOP_N: '100'
+          SEND_WAIT: 'false'
         run: python main.py
+
+      - name: Save sent signals (duplicate alert rokne ke liye)
+        run: |
+          git config user.name "romy-bot"
+          git config user.email "romy-bot@users.noreply.github.com"
+          git add sent_signals.json || true
+          git diff --cached --quiet || (git commit -m "update sent signals" && git push)
