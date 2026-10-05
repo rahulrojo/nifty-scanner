@@ -24,6 +24,8 @@ RR_RATIO = 1.5
 TOP_N = int(os.getenv("TOP_N", "100"))                     # kitne volatile stocks
 VOL_DAYS = 20                                               # volatility kitne din ki dekhni hai
 SEND_WAIT_ALERTS = os.getenv("SEND_WAIT", "false").lower() == "true"
+SEND_TEST = os.getenv("SEND_TEST", "true").lower() == "true"       # har run par test + summary msg
+TODAY_ONLY = os.getenv("ALERT_WINDOW", "today") == "today"          # "today" = aaj ke saare signals
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -272,6 +274,10 @@ def main() -> None:
         send_telegram("✅ Romy Alerts bot connected. Telegram test successful.")
         return
 
+    if SEND_TEST:
+        now_s = pd.Timestamp.now(tz=IST).strftime("%d-%b-%Y %I:%M %p")
+        send_telegram(f"✅ Romy Alerts TEST - bot connected.\nRun time: {now_s} IST")
+
     vol_map = top_volatile_stocks(TOP_N)
     print(f"Top volatile stocks mile: {len(vol_map)}")
 
@@ -286,9 +292,14 @@ def main() -> None:
     now = pd.Timestamp.now(tz=IST)
     sent = load_sent()
 
+    # saare events collect karo, phir time ke hisaab se bhejo
+    pending = []
     for t, df in data.items():
         for ev in run_strategy(df):
-            if ev["end"] < now - pd.Timedelta(minutes=70):
+            if TODAY_ONLY:
+                if ev["time"].date() != now.date():
+                    continue
+            elif ev["end"] < now - pd.Timedelta(minutes=70):
                 continue
             if ev["kind"] == "WAIT" and not SEND_WAIT_ALERTS:
                 continue
@@ -297,12 +308,27 @@ def main() -> None:
                 continue
             ev["name"] = names[t]
             ev["vol"] = vol_map.get(t)
-            send_telegram(build_message(ev))
-            sent.append(key)
-            print("Sent:", key)
+            ev["key"] = key
+            pending.append(ev)
+
+    pending.sort(key=lambda e: e["time"])
+    for ev in pending:
+        send_telegram(build_message(ev))
+        sent.append(ev["key"])
+        print("Sent:", ev["key"])
 
     with open(SENT_FILE, "w") as f:
-        json.dump(sent[-500:], f)
+        json.dump(sent[-1000:], f)
+
+    if SEND_TEST:
+        last = max((d.index[-1] for d in data.values()), default=None)
+        last_s = last.strftime("%d-%b %I:%M %p") if last is not None else "koi data nahi"
+        send_telegram(
+            f"📋 Scan complete\n"
+            f"Symbols scanned: {len(data)} / {len(tickers)}\n"
+            f"Last candle start: {last_s} IST\n"
+            f"Naye signals bheje: {len(pending)}"
+        )
 
 
 if __name__ == "__main__":
