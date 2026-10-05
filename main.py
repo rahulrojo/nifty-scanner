@@ -1,282 +1,309 @@
+"""
+Romy 9.5 Master Breakout Engine (30M) -> Telegram alerts
+Scan: sabse volatile 100 F&O (option trading) stocks + main indices.
+GitHub Actions har 30 min candle close ke baad ye script chalata hai.
+"""
+import json
 import os
+import sys
+import time
+
+import pandas as pd
 import requests
 import yfinance as yf
-import pandas as pd
-import numpy as np
-from datetime import datetime
-import pytz
 
-# ==========================================
-# CONFIGURATION SETTINGS
-# ==========================================
-SEND_TEST_MSG = False
+# ------------------------------------------------------------------
+# SETTINGS (Pine Script wali same values)
+# ------------------------------------------------------------------
+INTERVAL = "30m"
+EMA_FAST, EMA_SLOW, EMA_TREND = 9, 21, 50
+USE_TREND = True
+MAX_WAIT_BARS = 4
+RR_RATIO = 1.5
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+TOP_N = int(os.getenv("TOP_N", "100"))                     # kitne volatile stocks
+VOL_DAYS = 20                                               # volatility kitne din ki dekhni hai
+SEND_WAIT_ALERTS = os.getenv("SEND_WAIT", "false").lower() == "true"
 
-SYMBOLS = [
-    "^NSEI", "^NSEBANK", "NIFTY_FIN_SERVICE.NS", "NIFTY_MID_SELECT.NS",
-    "RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS",
-    "INFY.NS", "TCS.NS", "LT.NS", "BHARTIARTL.NS", "TATAMOTORS.NS", "TATASTEEL.NS",
-    "MARUTI.NS", "BAJFINANCE.NS", "HINDUNILVR.NS", "ADANIENT.NS", "ADANIPORTS.NS",
-    "SUNPHARMA.NS", "DRREDDY.NS", "CIPLA.NS", "CHOLAFIN.NS", "INDUSINDBK.NS", "BANKBARODA.NS",
-    "HDFCLIFE.NS", "SBILIFE.NS", "CANBK.NS", "PNB.NS", "JINDALSTEL.NS", "HINDALCO.NS",
-    "VEDL.NS", "BPCL.NS", "IOC.NS", "HPCL.NS", "TATAPOWER.NS", "POWERGRID.NS",
-    "NTPC.NS", "COALINDIA.NS", "DLF.NS", "GODREJPROP.NS", "METROPOLIS.NS", "APOLLOHOSP.NS",
-    "MAXHEALTH.NS", "DIXON.NS", "POLYCAB.NS", "HAL.NS", "BEL.NS", "RECLTD.NS",
-    "PFC.NS", "SHREECEM.NS", "ULTRACEMCO.NS", "GRASIM.NS", "ASIANPAINT.NS", "BERGEPAINT.NS",
-    "PIDILITIND.NS", "SIEMENS.NS", "ABB.NS", "HAVELLS.NS", "TRENT.NS", "PAGEIND.NS",
-    "COFORGE.NS", "PERSISTENT.NS", "LTTS.NS", "MPHASIS.NS", "TECHM.NS", "WIPRO.NS",
-    "HCLTECH.NS", "EICHERMOT.NS", "TVSMOTOR.NS", "HEROMOTOCO.NS", "BATAINDIA.NS", "TITAN.NS",
-    "VOLTAS.NS", "UPL.NS", "CONCOR.NS", "AUROPHARMA.NS", "LUPIN.NS", "MANAPPURAM.NS"
-]
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+IST = "Asia/Kolkata"
+SENT_FILE = "sent_signals.json"
 
-def send_telegram_message(message):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram Secrets Missing!")
+# Indices (hamesha scan honge)
+INDICES = {
+    "^NSEI": "NIFTY 50",
+    "^NSEBANK": "BANK NIFTY",
+    "NIFTY_FIN_SERVICE.NS": "FINNIFTY",
+    "^BSESN": "SENSEX",
+}
+
+# F&O stocks ki list (Yahoo ke .NS naam). F&O list time-time par badalti hai,
+# isliye isme naye stock add / band stock hata sakte ho.
+FNO_STOCKS = """
+AARTIIND ABB ABCAPITAL ABFRL ACC ADANIENSOL ADANIENT ADANIGREEN ADANIPORTS ALKEM AMBUJACEM
+ANGELONE APLAPOLLO APOLLOHOSP ASHOKLEY ASIANPAINT ASTRAL AUBANK AUROPHARMA AXISBANK BAJAJ-AUTO
+BAJAJFINSV BAJFINANCE BALKRISIND BANDHANBNK BANKBARODA BANKINDIA BDL BEL BHARATFORG BHARTIARTL
+BHEL BIOCON BLUESTARCO BOSCHLTD BPCL BRITANNIA BSE BSOFT CAMS CANBK CDSL CESC CGPOWER
+CHAMBLFERT CHOLAFIN CIPLA COALINDIA COFORGE COLPAL CONCOR CROMPTON CUMMINSIND CYIENT DABUR
+DALBHARAT DELHIVERY DIVISLAB DIXON DLF DMART DRREDDY EICHERMOT ESCORTS EXIDEIND FEDERALBNK
+FORTIS GAIL GLENMARK GMRAIRPORT GODREJCP GODREJPROP GRANULES GRASIM HAL HAVELLS HCLTECH
+HDFCAMC HDFCBANK HDFCLIFE HEROMOTOCO HFCL HINDALCO HINDCOPPER HINDPETRO HINDUNILVR HINDZINC
+HUDCO ICICIBANK ICICIGI ICICIPRULI IDEA IDFCFIRSTB IEX IGL IIFL INDHOTEL INDIANB INDIGO
+INDUSINDBK INDUSTOWER INFY INOXWIND IOC IRB IRCTC IREDA IRFC ITC JINDALSTEL JIOFIN JSWENERGY
+JSWSTEEL JUBLFOOD KALYANKJIL KEI KFINTECH KOTAKBANK KPITTECH LAURUSLABS LICHSGFIN LICI LODHA
+LT LTF LTIM LUPIN M&M MANAPPURAM MANKIND MARICO MARUTI MAXHEALTH MAZDOCK MCX MFSL MGL
+MOTHERSON MPHASIS MUTHOOTFIN NATIONALUM NAUKRI NBCC NCC NESTLEIND NHPC NMDC NTPC NYKAA
+OBEROIRLTY OFSS OIL ONGC PAGEIND PATANJALI PAYTM PERSISTENT PETRONET PFC PGEL PHOENIXLTD
+PIDILITIND PIIND PNB PNBHOUSING POLICYBZR POLYCAB POONAWALLA POWERGRID PPLPHARMA PRESTIGE
+RBLBANK RECLTD RELIANCE RVNL SAIL SBICARD SBILIFE SBIN SHREECEM SHRIRAMFIN SIEMENS SOLARINDS
+SONACOMS SRF SUNPHARMA SUPREMEIND SUZLON SYNGENE TATACHEM TATACONSUM TATAELXSI TATAMOTORS
+TATAPOWER TATASTEEL TATATECH TCS TECHM TIINDIA TITAGUARH TITAN TORNTPHARM TRENT TVSMOTOR
+ULTRACEMCO UNIONBANK UNITDSPR UNOMINDA UPL VBL VEDL VOLTAS WIPRO YESBANK ZYDUSLIFE
+""".split()
+
+
+# ------------------------------------------------------------------
+# VOLATILITY RANKING
+# ------------------------------------------------------------------
+def top_volatile_stocks(n: int) -> dict:
+    """Pichle 20 din ki average daily range % ke hisaab se top-n stocks."""
+    tickers = [s + ".NS" for s in FNO_STOCKS]
+    raw = yf.download(tickers, period="2mo", interval="1d", group_by="ticker",
+                      progress=False, auto_adjust=False, threads=True)
+    scores = {}
+    for t in tickers:
+        try:
+            d = raw[t].dropna().tail(VOL_DAYS)
+        except KeyError:
+            continue
+        if len(d) < 10:
+            continue
+        scores[t] = float(((d["High"] - d["Low"]) / d["Close"]).mean() * 100)
+    ranked = sorted(scores.items(), key=lambda x: -x[1])[:n]
+    return dict(ranked)
+
+
+# ------------------------------------------------------------------
+# DATA
+# ------------------------------------------------------------------
+def prepare(df: pd.DataFrame):
+    df = df.rename(columns=str.lower)[["open", "high", "low", "close"]].dropna()
+    if df.empty:
+        return df
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("UTC")
+    df.index = df.index.tz_convert(IST)
+
+    # sirf poori band hui candles (9:15 se shuru, last candle 15:15-15:30)
+    ends = pd.Series(df.index + pd.Timedelta(minutes=30), index=df.index)
+    mkt_close = pd.Series(df.index.normalize() + pd.Timedelta(hours=15, minutes=30), index=df.index)
+    ends = ends.where(ends <= mkt_close, mkt_close)
+    now = pd.Timestamp.now(tz=IST)
+    df = df[ends <= now].copy()
+    df["end"] = ends[ends <= now]
+    return df
+
+
+def fetch_all(tickers: list) -> dict:
+    raw = yf.download(tickers, period="15d", interval=INTERVAL, group_by="ticker",
+                      progress=False, auto_adjust=False, threads=True)
+    out = {}
+    for t in tickers:
+        try:
+            df = prepare(raw[t])
+        except KeyError:
+            continue
+        if len(df) > EMA_TREND:
+            out[t] = df
+    return out
+
+
+# ------------------------------------------------------------------
+# STRATEGY (Pine logic ka bar-by-bar port)
+# ------------------------------------------------------------------
+def run_strategy(df: pd.DataFrame) -> list:
+    o, h, l, c = df["open"], df["high"], df["low"], df["close"]
+    ef = c.ewm(span=EMA_FAST, adjust=False).mean()
+    es = c.ewm(span=EMA_SLOW, adjust=False).mean()
+    et = c.ewm(span=EMA_TREND, adjust=False).mean()
+
+    strong = (c - o).abs() > (h - l) * 0.4
+    cross_up = (ef > es) & (ef.shift(1) <= es.shift(1))
+    cross_dn = (ef < es) & (ef.shift(1) >= es.shift(1))
+    trend_up = (c > et) if USE_TREND else pd.Series(True, index=df.index)
+    trend_dn = (c < et) if USE_TREND else pd.Series(True, index=df.index)
+    ce_cond = (cross_up & trend_up & (c > o) & strong).tolist()
+    pe_cond = (cross_dn & trend_dn & (c < o) & strong).tolist()
+
+    events = []
+    pos = None
+    waiting = None
+    rh = rl = None
+    wc = 0
+    sig_time = None
+    last_day = None
+
+    for i in range(len(df)):
+        t = df.index[i]
+        end = df["end"].iloc[i]
+        hi, lo, cl = h.iloc[i], l.iloc[i], c.iloc[i]
+
+        if last_day is not None and t.date() != last_day:
+            pos = None
+            waiting = None
+        last_day = t.date()
+
+        if pos is not None and i > pos["i"]:
+            if pos["side"] == "CE":
+                if lo <= pos["sl"] or hi >= pos["tp"]:
+                    pos = None
+            else:
+                if hi >= pos["sl"] or lo <= pos["tp"]:
+                    pos = None
+
+        flat = pos is None
+
+        if ce_cond[i] and waiting != "CE" and flat:
+            rh, rl, waiting, wc, sig_time = hi, lo, "CE", 0, t
+            events.append(dict(kind="WAIT", side="CE", time=t, end=end, high=rh, low=rl))
+        elif pe_cond[i] and waiting != "PE" and flat:
+            rh, rl, waiting, wc, sig_time = hi, lo, "PE", 0, t
+            events.append(dict(kind="WAIT", side="PE", time=t, end=end, high=rh, low=rl))
+
+        if waiting:
+            wc += 1
+        if waiting and wc > MAX_WAIT_BARS:
+            waiting = None
+
+        confirmed = None
+        if waiting == "CE" and cl > rh and flat:
+            confirmed = "CE"
+        elif waiting == "PE" and cl < rl and flat:
+            confirmed = "PE"
+
+        if waiting == "CE" and cl < rl:
+            waiting = None
+        if waiting == "PE" and cl > rh:
+            waiting = None
+
+        if confirmed == "CE":
+            entry, sl = cl, rl
+            risk = entry - sl
+            if risk > 0:
+                tp = entry + risk * RR_RATIO
+                pos = dict(side="CE", sl=sl, tp=tp, i=i)
+                events.append(dict(kind="BUY", side="CE", time=t, end=end, entry=entry,
+                                   sl=sl, tp=tp, risk=risk, sig_time=sig_time))
+                waiting = None
+        elif confirmed == "PE":
+            entry, sl = cl, rh
+            risk = sl - entry
+            if risk > 0:
+                tp = entry - risk * RR_RATIO
+                pos = dict(side="PE", sl=sl, tp=tp, i=i)
+                events.append(dict(kind="BUY", side="PE", time=t, end=end, entry=entry,
+                                   sl=sl, tp=tp, risk=risk, sig_time=sig_time))
+                waiting = None
+
+    return events
+
+
+# ------------------------------------------------------------------
+# TELEGRAM
+# ------------------------------------------------------------------
+def fmt_time(ts) -> str:
+    return ts.strftime("%I:%M %p")
+
+
+def build_message(ev: dict) -> str:
+    name = ev["name"]
+    vol = f"\n📊 Volatility (20d range): {ev['vol']:.2f}%" if ev.get("vol") else ""
+    day = ev["time"].strftime("%d-%b-%Y")
+    candle = f"{fmt_time(ev['time'])} - {fmt_time(ev['end'])} IST ({day})"
+
+    if ev["kind"] == "WAIT":
+        return (
+            f"⏳ WAIT {ev['side']} - {name}\n"
+            f"🕒 Signal Candle: {candle}\n"
+            f"🔺 Breakout High: {ev['high']:.2f}\n"
+            f"🔻 Breakout Low: {ev['low']:.2f}{vol}\n"
+            f"Confirmation ka wait karo (max {MAX_WAIT_BARS} candles)."
+        )
+
+    icon = "🚀" if ev["side"] == "CE" else "💥"
+    sig = f"\n⏳ Signal Candle: {fmt_time(ev['sig_time'])}" if ev.get("sig_time") is not None else ""
+    return (
+        f"{icon} {ev['side']} BUY NOW - {name}\n"
+        f"🕒 Candle Time: {candle}{sig}\n"
+        f"📍 Entry (candle close): {ev['entry']:.2f}\n"
+        f"🛑 Stoploss: {ev['sl']:.2f}\n"
+        f"🎯 Target: {ev['tp']:.2f}\n"
+        f"📏 Risk: {ev['risk']:.2f} pts | RR 1:{RR_RATIO}{vol}\n"
+        f"(SL/Target underlying price par hain)"
+    )
+
+
+def send_telegram(text: str) -> None:
+    if not TOKEN or not CHAT_ID:
+        print("Telegram secrets missing!")
+        sys.exit(1)
+    r = requests.post(
+        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+        data={"chat_id": CHAT_ID, "text": text},
+        timeout=20,
+    )
+    r.raise_for_status()
+    time.sleep(0.5)  # Telegram rate limit se bachne ke liye
+
+
+# ------------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------------
+def load_sent() -> list:
+    if os.path.exists(SENT_FILE):
+        with open(SENT_FILE) as f:
+            return json.load(f)
+    return []
+
+
+def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        send_telegram("✅ Romy Alerts bot connected. Telegram test successful.")
         return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": False  # Preview enable rakha hai
-    }
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"Telegram Error: {e}")
 
-def get_tradingview_url(clean_symbol):
-    """TradingView ke liye exact symbol URL mapping karta hai"""
-    tv_symbol = clean_symbol
-    if clean_symbol == "NSEI":
-        tv_symbol = "NIFTY"
-    elif clean_symbol == "NSEBANK":
-        tv_symbol = "BANKNIFTY"
-    elif clean_symbol == "NIFTY_FIN_SERVICE":
-        tv_symbol = "FINNIFTY"
-    elif clean_symbol == "NIFTY_MID_SELECT":
-        tv_symbol = "MIDCPNIFTY"
+    vol_map = top_volatile_stocks(TOP_N)
+    print(f"Top volatile stocks mile: {len(vol_map)}")
 
-    return f"https://in.tradingview.com/chart/?symbol=NSE%3A{tv_symbol}"
+    names = dict(INDICES)
+    for t in vol_map:
+        names[t] = t.replace(".NS", "")
+    tickers = list(names.keys())
 
-def calculate_ema(series, length):
-    return series.ewm(span=length, adjust=False).mean()
+    data = fetch_all(tickers)
+    print(f"Intraday data mila: {len(data)} / {len(tickers)} symbols")
 
-def resample_nse_strict_30m(df_5m):
-    if df_5m.empty:
-        return pd.DataFrame()
+    now = pd.Timestamp.now(tz=IST)
+    sent = load_sent()
 
-    df = df_5m.copy()
-    if df.index.tzinfo is not None:
-        df.index = df.index.tz_convert('Asia/Kolkata')
-    else:
-        df.index = df.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
+    for t, df in data.items():
+        for ev in run_strategy(df):
+            if ev["end"] < now - pd.Timedelta(minutes=70):
+                continue
+            if ev["kind"] == "WAIT" and not SEND_WAIT_ALERTS:
+                continue
+            key = f"{t}|{ev['kind']}|{ev['side']}|{ev['time'].isoformat()}"
+            if key in sent:
+                continue
+            ev["name"] = names[t]
+            ev["vol"] = vol_map.get(t)
+            send_telegram(build_message(ev))
+            sent.append(key)
+            print("Sent:", key)
 
-    df = df.between_time('09:15', '15:29')
+    with open(SENT_FILE, "w") as f:
+        json.dump(sent[-500:], f)
 
-    def assign_nse_bin(ts):
-        t = ts.time()
-        minutes_from_open = (t.hour - 9) * 60 + (t.minute - 15)
-        if minutes_from_open < 0:
-            return None
-        
-        bin_idx = minutes_from_open // 30
-        bin_start_mins = 9 * 60 + 15 + (bin_idx * 30)
-        
-        h = bin_start_mins // 60
-        m = bin_start_mins % 60
-        
-        if h > 15 or (h == 15 and m > 15):
-            h, m = 15, 15
-            
-        return f"{h:02d}:{m:02d}"
-
-    df['Date'] = df.index.date
-    df['BinTime'] = [assign_nse_bin(ts) for ts in df.index]
-    df = df.dropna(subset=['BinTime'])
-
-    grouped = df.groupby(['Date', 'BinTime']).agg({
-        'Open': 'first',
-        'High': 'max',
-        'Low': 'min',
-        'Close': 'last',
-        'Volume': 'sum'
-    }).reset_index()
-
-    grouped['Datetime'] = pd.to_datetime(grouped['Date'].astype(str) + ' ' + grouped['BinTime'])
-    grouped = grouped.set_index('Datetime').sort_index()
-
-    return grouped[['Open', 'High', 'Low', 'Close', 'Volume']]
-
-def analyze_symbol_for_today(symbol):
-    try:
-        df_5m = yf.download(symbol, period="1mo", interval="5m", auto_adjust=False, progress=False)
-        if df_5m.empty:
-            return []
-
-        if isinstance(df_5m.columns, pd.MultiIndex):
-            df_5m.columns = df_5m.columns.get_level_values(0)
-
-        df = resample_nse_strict_30m(df_5m)
-        if len(df) < 50:
-            return []
-
-        df['EMA_Fast'] = calculate_ema(df['Close'], 9)
-        df['EMA_Slow'] = calculate_ema(df['Close'], 21)
-        df['EMA_Trend'] = calculate_ema(df['Close'], 50)
-
-        df['CandleBody'] = (df['Close'] - df['Open']).abs()
-        df['CandleRange'] = df['High'] - df['Low']
-        df['IsStrong'] = df['CandleBody'] > (df['CandleRange'] * 0.4)
-
-        df['EMACrossOver'] = (df['EMA_Fast'] > df['EMA_Slow']) & (df['EMA_Fast'].shift(1) <= df['EMA_Slow'].shift(1))
-        df['EMACrossUnder'] = (df['EMA_Fast'] < df['EMA_Slow']) & (df['EMA_Fast'].shift(1) >= df['EMA_Slow'].shift(1))
-
-        df['CE_Condition'] = df['EMACrossOver'] & (df['Close'] > df['EMA_Trend']) & (df['Close'] > df['Open']) & df['IsStrong']
-        df['PE_Condition'] = df['EMACrossUnder'] & (df['Close'] < df['EMA_Trend']) & (df['Close'] < df['Open']) & df['IsStrong']
-
-        waitingCE = False
-        waitingPE = False
-        rangeHigh = 0.0
-        rangeLow = 0.0
-        waitCount = 0
-        maxWaitBars = 4
-
-        in_position = False
-        pos_type = None
-        sl_price = 0.0
-        tp_price = 0.0
-
-        last_data_date = df.index[-1].date()
-        target_date = last_data_date
-
-        alerts = []
-
-        for i in range(30, len(df)):
-            row = df.iloc[i]
-            ist_time = df.index[i]
-            candle_date = ist_time.date()
-            prev_date = df.index[i-1].date() if i > 0 else candle_date
-
-            if candle_date != prev_date:
-                in_position = False
-                pos_type = None
-                waitingCE = False
-                waitingPE = False
-
-            if in_position:
-                if pos_type == 'CE':
-                    if float(row['Low']) <= sl_price or float(row['High']) >= tp_price:
-                        in_position = False
-                        pos_type = None
-                elif pos_type == 'PE':
-                    if float(row['High']) >= sl_price or float(row['Low']) <= tp_price:
-                        in_position = False
-                        pos_type = None
-
-            if row['CE_Condition'] and not waitingCE and not in_position:
-                rangeHigh = float(row['High'])
-                rangeLow = float(row['Low'])
-                waitingCE = True
-                waitingPE = False
-                waitCount = 0
-
-            elif row['PE_Condition'] and not waitingPE and not in_position:
-                rangeHigh = float(row['High'])
-                rangeLow = float(row['Low'])
-                waitingPE = True
-                waitingCE = False
-                waitCount = 0
-
-            if waitingCE or waitingPE:
-                waitCount += 1
-
-            if waitCount > maxWaitBars:
-                waitingCE = False
-                waitingPE = False
-
-            confirmedCE = waitingCE and (float(row['Close']) > rangeHigh) and not in_position
-            confirmedPE = waitingPE and (float(row['Close']) < rangeLow) and not in_position
-
-            if waitingCE and (float(row['Close']) < rangeLow):
-                waitingCE = False
-            if waitingPE and (float(row['Close']) > rangeHigh):
-                waitingPE = False
-
-            if candle_date == target_date:
-                clean_symbol = symbol.replace(".NS", "").replace("^", "")
-                last_price = round(float(row['Close']), 2)
-                candle_time_str = ist_time.strftime('%d-%b %I:%M %p')
-                tv_link = get_tradingview_url(clean_symbol)
-
-                if confirmedCE:
-                    sl = round(rangeLow, 2)
-                    risk = last_price - sl
-                    if risk > 0:
-                        tp = round(last_price + (risk * 1.5), 2)
-                        msg = (
-                            f"🚀 *ROMY 9.5: CE BUY SIGNAL*\n\n"
-                            f"📌 *Symbol:* {clean_symbol}\n"
-                            f"⏰ *Timeframe:* 30M (NSE Session)\n"
-                            f"🕐 *Candle Time:* {candle_time_str}\n"
-                            f"💵 *Entry Price:* ₹{last_price}\n"
-                            f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
-                            f"🎯 *Target (TP 1:1.5):* ₹{tp}\n\n"
-                            f"📊 [Open Chart on TradingView]({tv_link})"
-                        )
-                        alerts.append(msg)
-
-                elif confirmedPE:
-                    sl = round(rangeHigh, 2)
-                    risk = sl - last_price
-                    if risk > 0:
-                        tp = round(last_price - (risk * 1.5), 2)
-                        msg = (
-                            f"💥 *ROMY 9.5: PE BUY SIGNAL*\n\n"
-                            f"📌 *Symbol:* {clean_symbol}\n"
-                            f"⏰ *Timeframe:* 30M (NSE Session)\n"
-                            f"🕐 *Candle Time:* {candle_time_str}\n"
-                            f"💵 *Entry Price:* ₹{last_price}\n"
-                            f"🛑 *Stop-Loss (SL):* ₹{sl}\n"
-                            f"🎯 *Target (TP 1:1.5):* ₹{tp}\n\n"
-                            f"📊 [Open Chart on TradingView]({tv_link})"
-                        )
-                        alerts.append(msg)
-
-            if confirmedCE:
-                in_position = True
-                pos_type = 'CE'
-                sl_price = rangeLow
-                sl_risk = float(row['Close']) - sl_price
-                tp_price = float(row['Close']) + (sl_risk * 1.5)
-                waitingCE = False
-
-            elif confirmedPE:
-                in_position = True
-                pos_type = 'PE'
-                sl_price = rangeHigh
-                sl_risk = sl_price - float(row['Close'])
-                tp_price = float(row['Close']) - (sl_risk * 1.5)
-                waitingPE = False
-
-        return alerts
-    except Exception as e:
-        print(f"Error analyzing {symbol}: {e}")
-        return []
-
-def main():
-    print("Scanning All Stocks with TradingView Direct Links...")
-    total_alerts = 0
-    for symbol in SYMBOLS:
-        alerts = analyze_symbol_for_today(symbol)
-        for alert_msg in alerts:
-            send_telegram_message(alert_msg)
-            total_alerts += 1
-            print(f"Alert Sent for {symbol}!")
-
-    print(f"\nScan Finished! Total valid signals: {total_alerts}")
 
 if __name__ == "__main__":
     main()
