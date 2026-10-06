@@ -123,6 +123,13 @@ def prepare(df: pd.DataFrame):
         df.index = df.index.tz_localize("UTC")
     df.index = df.index.tz_convert(IST)
 
+    # 15m data ko 30m me badlo, candle 9:15 se shuru (TradingView jaisa): 9:15, 9:45 ... 15:15
+    df = df.resample("30min", offset="15min").agg(
+        {"open": "first", "high": "max", "low": "min", "close": "last"}
+    ).dropna()
+    if df.empty:
+        return df
+
     # sirf poori band hui candles (9:15 se shuru, last candle 15:15-15:30)
     ends = pd.Series(df.index + pd.Timedelta(minutes=30), index=df.index)
     mkt_close = pd.Series(df.index.normalize() + pd.Timedelta(hours=15, minutes=30), index=df.index)
@@ -134,7 +141,7 @@ def prepare(df: pd.DataFrame):
 
 
 def fetch_all(tickers: list) -> dict:
-    raw = yf.download(tickers, period="59d", interval=INTERVAL, group_by="ticker",
+    raw = yf.download(tickers, period="59d", interval="15m", group_by="ticker",
                       progress=False, auto_adjust=False, threads=True)
     out = {}
     for t in tickers:
