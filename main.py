@@ -26,7 +26,7 @@ TOP_N = int(os.getenv("TOP_N", "100"))                     # kitne volatile stoc
 VOL_DAYS = 20                                               # volatility kitne din ki dekhni hai
 SEND_WAIT_ALERTS = os.getenv("SEND_WAIT", "false").lower() == "true"
 SEND_TEST = os.getenv("SEND_TEST", "true").lower() == "true"       # har run par test + summary msg
-TODAY_ONLY = os.getenv("ALERT_WINDOW", "today") == "today"          # "today" = aaj ke saare signals
+ALERT_DAYS = int(os.getenv("ALERT_DAYS", "1"))                      # 1 = sirf aaj, 5 = pichle 5 din ke signals
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -350,12 +350,15 @@ def main() -> None:
 
     # saare events collect karo, phir time ke hisaab se bhejo
     pending = []
+    found_today = {"WAIT": 0, "BUY": 0}
+    latest_buy = None
     for t, df in data.items():
         for ev in run_strategy(df):
-            if TODAY_ONLY:
-                if ev["time"].date() != now.date():
-                    continue
-            elif ev["end"] < now - pd.Timedelta(minutes=70):
+            if ev["kind"] == "BUY" and (latest_buy is None or ev["time"] > latest_buy[0]):
+                latest_buy = (ev["time"], names[t], ev["side"])
+            if ev["time"].date() == now.date():
+                found_today[ev["kind"]] += 1
+            if ev["time"].date() < (now - pd.Timedelta(days=ALERT_DAYS - 1)).date():
                 continue
             if ev["kind"] == "WAIT" and not SEND_WAIT_ALERTS:
                 continue
@@ -380,10 +383,16 @@ def main() -> None:
     if SEND_TEST:
         last = max((d.index[-1] for d in data.values()), default=None)
         last_s = last.strftime("%d-%b %I:%M %p") if last is not None else "koi data nahi"
+        if latest_buy:
+            lb = f"{latest_buy[1]} {latest_buy[2]} @ {latest_buy[0].strftime('%d-%b %I:%M %p')}"
+        else:
+            lb = "koi nahi"
         send_telegram(
             f"📋 Scan complete\n"
             f"Symbols scanned: {len(data)} / {len(tickers)}\n"
             f"Last candle start: {last_s} IST\n"
+            f"Aaj mile: {found_today['WAIT']} WAIT, {found_today['BUY']} BUY\n"
+            f"Pichla BUY signal (59 din me): {lb}\n"
             f"Naye signals bheje: {len(pending)}"
         )
 
