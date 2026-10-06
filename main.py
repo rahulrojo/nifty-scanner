@@ -8,6 +8,7 @@ import os
 import sys
 import time
 
+import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
@@ -68,6 +69,31 @@ ULTRACEMCO UNIONBANK UNITDSPR UNOMINDA UPL VBL VEDL VOLTAS WIPRO YESBANK ZYDUSLI
 # ------------------------------------------------------------------
 # VOLATILITY RANKING
 # ------------------------------------------------------------------
+def pine_ema(s: pd.Series, length: int) -> pd.Series:
+    """TradingView ta.ema jaisa: pehli value SMA se seed hoti hai."""
+    v = s.values.astype(float)
+    out = np.full(len(v), np.nan)
+    if len(v) >= length:
+        a = 2.0 / (length + 1)
+        out[length - 1] = v[:length].mean()
+        for i in range(length, len(v)):
+            out[i] = a * v[i] + (1 - a) * out[i - 1]
+    return pd.Series(out, index=s.index)
+
+
+TV_INDEX = {
+    "^NSEI": "NSE:NIFTY",
+    "^NSEBANK": "NSE:BANKNIFTY",
+    "NIFTY_FIN_SERVICE.NS": "NSE:CNXFINANCE",
+    "^BSESN": "BSE:SENSEX",
+}
+
+
+def tv_link(ticker: str) -> str:
+    sym = TV_INDEX.get(ticker) or "NSE:" + ticker.replace(".NS", "").replace("&", "_").replace("-", "_")
+    return f"https://www.tradingview.com/chart/?symbol={sym}&interval=30"
+
+
 def top_volatile_stocks(n: int) -> dict:
     """Pichle 20 din ki average daily range % ke hisaab se top-n stocks."""
     tickers = [s + ".NS" for s in FNO_STOCKS]
@@ -108,12 +134,13 @@ def prepare(df: pd.DataFrame):
 
 
 def fetch_all(tickers: list) -> dict:
-    raw = yf.download(tickers, period="15d", interval=INTERVAL, group_by="ticker",
+    raw = yf.download(tickers, period="59d", interval=INTERVAL, group_by="ticker",
                       progress=False, auto_adjust=False, threads=True)
     out = {}
     for t in tickers:
         try:
-            df = prepare(raw[t])
+            sub = raw[t] if isinstance(raw.columns, pd.MultiIndex) else raw
+            df = prepare(sub)
         except KeyError:
             continue
         if len(df) > EMA_TREND:
@@ -126,9 +153,9 @@ def fetch_all(tickers: list) -> dict:
 # ------------------------------------------------------------------
 def run_strategy(df: pd.DataFrame) -> list:
     o, h, l, c = df["open"], df["high"], df["low"], df["close"]
-    ef = c.ewm(span=EMA_FAST, adjust=False).mean()
-    es = c.ewm(span=EMA_SLOW, adjust=False).mean()
-    et = c.ewm(span=EMA_TREND, adjust=False).mean()
+    ef = pine_ema(c, EMA_FAST)
+    es = pine_ema(c, EMA_SLOW)
+    et = pine_ema(c, EMA_TREND)
 
     strong = (c - o).abs() > (h - l) * 0.4
     cross_up = (ef > es) & (ef.shift(1) <= es.shift(1))
@@ -151,9 +178,8 @@ def run_strategy(df: pd.DataFrame) -> list:
         end = df["end"].iloc[i]
         hi, lo, cl = h.iloc[i], l.iloc[i], c.iloc[i]
 
-        if last_day is not None and t.date() != last_day:
-            pos = None
-            waiting = None
+        # Pine: naye din par sirf position close hoti hai (wait state reset nahi hota)
+        close_pending = last_day is not None and t.date() != last_day
         last_day = t.date()
 
         if pos is not None and i > pos["i"]:
@@ -208,6 +234,9 @@ def run_strategy(df: pd.DataFrame) -> list:
                                    sl=sl, tp=tp, risk=risk, sig_time=sig_time))
                 waiting = None
 
+        if close_pending:
+            pos = None  # strategy.close_all() naye din ki pehli candle ke baad
+
     return events
 
 
@@ -230,7 +259,8 @@ def build_message(ev: dict) -> str:
             f"🕒 Signal Candle: {candle}\n"
             f"🔺 Breakout High: {ev['high']:.2f}\n"
             f"🔻 Breakout Low: {ev['low']:.2f}{vol}\n"
-            f"Confirmation ka wait karo (max {MAX_WAIT_BARS} candles)."
+            f"Confirmation ka wait karo (max {MAX_WAIT_BARS} candles).\n"
+            f"📈 Chart: {ev['tv']}"
         )
 
     icon = "🚀" if ev["side"] == "CE" else "💥"
@@ -242,7 +272,8 @@ def build_message(ev: dict) -> str:
         f"🛑 Stoploss: {ev['sl']:.2f}\n"
         f"🎯 Target: {ev['tp']:.2f}\n"
         f"📏 Risk: {ev['risk']:.2f} pts | RR 1:{RR_RATIO}{vol}\n"
-        f"(SL/Target underlying price par hain)"
+        f"(SL/Target underlying price par hain)\n"
+        f"📈 Chart: {ev['tv']}"
     )
 
 
@@ -269,9 +300,34 @@ def load_sent() -> list:
     return []
 
 
+def check_mode(sym: str, date_str: str) -> None:
+    """Ek stock ka history check: us din ke saare signals (WAIT + BUY) Telegram par bhejo."""
+    t = sym if (sym.startswith("^") or sym.endswith(".NS")) else sym + ".NS"
+    data = fetch_all([t])
+    if t not in data:
+        send_telegram(f"🔎 {sym}: data nahi mila.")
+        return
+    events = run_strategy(data[t])
+    if date_str:
+        events = [e for e in events if str(e["time"].date()) == date_str]
+    if not events:
+        send_telegram(f"🔎 {sym}: {date_str or 'is period'} me koi WAIT/BUY signal nahi mila.")
+        return
+    for ev in events:
+        ev["name"] = sym
+        ev["vol"] = None
+        ev["tv"] = tv_link(t)
+        send_telegram("🔎 CHECK\n" + build_message(ev))
+
+
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "test":
         send_telegram("✅ Romy Alerts bot connected. Telegram test successful.")
+        return
+
+    check_sym = os.getenv("CHECK_SYMBOL", "").strip().upper()
+    if check_sym:
+        check_mode(check_sym, os.getenv("CHECK_DATE", "").strip())
         return
 
     if SEND_TEST:
@@ -309,6 +365,7 @@ def main() -> None:
             ev["name"] = names[t]
             ev["vol"] = vol_map.get(t)
             ev["key"] = key
+            ev["tv"] = tv_link(t)
             pending.append(ev)
 
     pending.sort(key=lambda e: e["time"])
