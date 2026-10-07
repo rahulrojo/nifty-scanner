@@ -103,21 +103,17 @@ def resample_nse_strict_30m(df_5m):
     return grouped[['Open', 'High', 'Low', 'Close', 'Volume']]
 
 def calculate_indicators(df):
-    # ATR 14
     high_low = df['High'] - df['Low']
     high_close = (df['High'] - df['Close'].shift(1)).abs()
     low_close = (df['Low'] - df['Close'].shift(1)).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(14).mean()
 
-    # EMA 21
     df['EMA21'] = df['Close'].ewm(span=21, adjust=False).mean()
 
-    # VWAP
     hlc3 = (df['High'] + df['Low'] + df['Close']) / 3
     df['VWAP'] = (hlc3 * df['Volume']).cumsum() / df['Volume'].cumsum().replace(0, np.nan)
 
-    # Avg Volume 20
     df['AvgVol'] = df['Volume'].rolling(20).mean()
     return df
 
@@ -136,7 +132,6 @@ def analyze_mother_candle(symbol):
 
         df = calculate_indicators(df)
 
-        # Settings as per Pine script
         minAtrMult = 1.0
         maxAtrMult = 2.5
         minBodyPct = 0.50
@@ -166,21 +161,17 @@ def analyze_mother_candle(symbol):
             candle_date = ist_time.date()
             prev_date = df.index[i-1].date() if i > 0 else candle_date
 
-            # Expiry check
             if mActive and ((i - mBarIdx > maxBars) or (candle_date != prev_date)):
                 mActive = False
 
-            # Check inside bar condition
             insideBar = (row['High'] <= prev_row['High']) and (row['Low'] >= prev_row['Low'])
             cRange = prev_row['High'] - prev_row['Low']
             cBody = abs(prev_row['Close'] - prev_row['Open'])
             cAtr = prev_row['ATR'] if not np.isnan(prev_row['ATR']) else 1.0
 
-            # Time session filter (09:15 to 13:30 for mother candle setup)
             motherTimeOk = prev_row.name.strftime('%H:%M') <= '13:30'
             cOk = (cRange >= minAtrMult * cAtr) and (cRange <= maxAtrMult * cAtr) and (cBody >= minBodyPct * cRange) and motherTimeOk
 
-            # Form new Mother Candle
             if not mActive and insideBar and cOk:
                 mHigh = float(prev_row['High'])
                 mLow = float(prev_row['Low'])
@@ -196,11 +187,9 @@ def analyze_mother_candle(symbol):
             if not mActive:
                 continue
 
-            # Signal Session Filter (09:15 to 14:30)
             sigTimeOk = ist_time.strftime('%H:%M') <= '14:30'
             armed = insideCount >= minInside
 
-            # Calculate Score (0-4)
             avg_vol = float(row['AvgVol']) if not np.isnan(row['AvgVol']) else 1.0
             sc1 = 1 if mVol >= avg_vol else 0
             sc2 = 1 if insideCount >= 2 else 0
@@ -208,7 +197,6 @@ def analyze_mother_candle(symbol):
             sc4 = 1 if float(row['Volume']) >= avg_vol else 0
             score = sc1 + sc2 + sc3 + sc4
 
-            # Breakout Checks
             close = float(row['Close'])
             open_p = float(row['Open'])
             high = float(row['High'])
@@ -266,10 +254,10 @@ def analyze_mother_candle(symbol):
                     f"📊 [Open Chart on TradingView]({tv_link})"
                 )
                 alerts.append(msg)
-                mActive = False  # Signal generated, deactivate mother candle
+                mActive = False
 
         return alerts
-    except Exception e:
+    except Exception as e:
         print(f"Error scanning {symbol}: {e}")
         return []
 
