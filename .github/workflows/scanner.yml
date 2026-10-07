@@ -3,9 +3,8 @@ name: Mother Candle 30M Scanner
 on:
   schedule:
     # Runs every 30 minutes during NSE Market Hours (09:15 AM to 03:30 PM IST)
-    # 03:45 UTC to 10:15 UTC (Mon-Fri)
     - cron: '15,45 3-9 * * 1-5'
-  workflow_dispatch: # Manual Run button
+  workflow_dispatch:
 
 jobs:
   scan_and_alert:
@@ -13,12 +12,12 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python 3.10
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-python-version: '3.10'
+          python-version: '3.10'
 
       - name: Install Dependencies
         run: |
