@@ -102,19 +102,12 @@ def resample_nse_strict_30m(df_5m):
     grouped = grouped.set_index('Datetime').sort_index()
     return grouped[['Open', 'High', 'Low', 'Close', 'Volume']]
 
-def calculate_indicators(df):
+def calculate_atr(df):
     high_low = df['High'] - df['Low']
     high_close = (df['High'] - df['Close'].shift(1)).abs()
     low_close = (df['Low'] - df['Close'].shift(1)).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['ATR'] = tr.rolling(14).mean()
-
-    df['EMA21'] = df['Close'].ewm(span=21, adjust=False).mean()
-
-    hlc3 = (df['High'] + df['Low'] + df['Close']) / 3
-    df['VWAP'] = (hlc3 * df['Volume']).cumsum() / df['Volume'].cumsum().replace(0, np.nan)
-
-    df['AvgVol'] = df['Volume'].rolling(20).mean()
     return df
 
 def analyze_mother_candle(symbol):
@@ -127,43 +120,37 @@ def analyze_mother_candle(symbol):
             df_5m.columns = df_5m.columns.get_level_values(0)
 
         df = resample_nse_strict_30m(df_5m)
-        if len(df) < 30:
+        if len(df) < 20:
             return []
 
-        df = calculate_indicators(df)
+        df = calculate_atr(df)
 
         minAtrMult = 1.0
         maxAtrMult = 2.5
         minBodyPct = 0.50
-        minInside = 1
         maxBars = 8
-        brkBodyPct = 0.40
-        maxBrkAtr = 2.0
-        minScore = 2
-        maxRiskAtr = 2.0
 
         mHigh = None
         mLow = None
-        mVol = None
         mBarIdx = None
         mActive = False
-        insideCount = 0
-        lastChildRange = None
 
         last_data_date = df.index[-1].date()
         target_date = last_data_date
         alerts = []
 
-        for i in range(20, len(df)):
+        for i in range(15, len(df)):
             row = df.iloc[i]
             prev_row = df.iloc[i-1]
             ist_time = df.index[i]
             candle_date = ist_time.date()
             prev_date = df.index[i-1].date() if i > 0 else candle_date
 
+            # Reset / Expiry condition
             if mActive and ((i - mBarIdx > maxBars) or (candle_date != prev_date)):
                 mActive = False
 
+            # Inside Bar & Mother Candle Rules
             insideBar = (row['High'] <= prev_row['High']) and (row['Low'] >= prev_row['Low'])
             cRange = prev_row['High'] - prev_row['Low']
             cBody = abs(prev_row['Close'] - prev_row['Open'])
@@ -172,89 +159,45 @@ def analyze_mother_candle(symbol):
             motherTimeOk = prev_row.name.strftime('%H:%M') <= '13:30'
             cOk = (cRange >= minAtrMult * cAtr) and (cRange <= maxAtrMult * cAtr) and (cBody >= minBodyPct * cRange) and motherTimeOk
 
+            # Detect Mother Candle
             if not mActive and insideBar and cOk:
                 mHigh = float(prev_row['High'])
                 mLow = float(prev_row['Low'])
-                mVol = float(prev_row['Volume'])
                 mBarIdx = i - 1
                 mActive = True
-                insideCount = 1
-                lastChildRange = float(row['High'] - row['Low'])
-            elif mActive and (i > mBarIdx) and (row['High'] <= mHigh) and (row['Low'] >= mLow):
-                insideCount += 1
-                lastChildRange = float(row['High'] - row['Low'])
 
-            if not mActive:
+            if not mActive or (i <= mBarIdx + 1):
                 continue
 
-            sigTimeOk = ist_time.strftime('%H:%M') <= '14:30'
-            armed = insideCount >= minInside
-
-            avg_vol = float(row['AvgVol']) if not np.isnan(row['AvgVol']) else 1.0
-            sc1 = 1 if mVol >= avg_vol else 0
-            sc2 = 1 if insideCount >= 2 else 0
-            sc3 = 1 if (lastChildRange is not None and lastChildRange <= 0.6 * (mHigh - mLow)) else 0
-            sc4 = 1 if float(row['Volume']) >= avg_vol else 0
-            score = sc1 + sc2 + sc3 + sc4
-
             close = float(row['Close'])
-            open_p = float(row['Open'])
-            high = float(row['High'])
-            low = float(row['Low'])
-            c_atr = float(row['ATR'])
 
+            # Simple High / Low Breakout Check
             brkUp = close > mHigh
             brkDn = close < mLow
 
-            bodyOk = (high - low > 0) and (abs(close - open_p) >= brkBodyPct * (high - low))
-            sizeOk = (high - low) <= maxBrkAtr * c_atr
-
-            trendCE = close > float(row['EMA21'])
-            trendPE = close < float(row['EMA21'])
-
-            vwap_val = float(row['VWAP']) if not np.isnan(row['VWAP']) else close
-            vwapCE = close > vwap_val
-            vwapPE = close < vwap_val
-
-            slCE = (mHigh + mLow) / 2.0
-            slPE = (mHigh + mLow) / 2.0
-
-            riskCE = close - slCE
-            riskPE = slPE - close
-
-            riskOkCE = (riskCE > 0) and (riskCE <= maxRiskAtr * c_atr)
-            riskOkPE = (riskPE > 0) and (riskPE <= maxRiskAtr * c_atr)
-
-            common = armed and sigTimeOk and bodyOk and sizeOk and (score >= minScore)
-            ceSig = common and brkUp and not brkDn and (close > open_p) and trendCE and vwapCE and riskOkCE
-            peSig = common and brkDn and not brkUp and (close < open_p) and trendPE and vwapPE and riskOkPE
-
-            if (ceSig or peSig) and (candle_date == target_date):
+            if (brkUp or brkDn) and (candle_date == target_date):
                 clean_symbol = symbol.replace(".NS", "").replace("^", "")
-                entry = round(close, 2)
-                sl = round(slCE if ceSig else slPE, 2)
-                risk = abs(entry - sl)
-                t1 = round(entry + risk * 1.0 if ceSig else entry - risk * 1.0, 2)
-                t2 = round(entry + risk * 2.0 if ceSig else entry - risk * 2.0, 2)
+                close_price = round(close, 2)
                 candle_time_str = ist_time.strftime('%d-%b %I:%M %p')
                 tv_link = get_tradingview_url(clean_symbol)
-                side = "BUY CE" if ceSig else "BUY PE"
-                icon = "🚀" if ceSig else "💥"
+
+                if brkUp:
+                    signal_type = "CE WAIT"
+                    icon = "⚡"
+                else:
+                    signal_type = "PE WAIT"
+                    icon = "🔻"
 
                 msg = (
-                    f"{icon} *MOTHER CANDLE BREAKOUT: {side}*\n\n"
+                    f"{icon} *MOTHER CANDLE BREAKOUT: {signal_type}*\n\n"
                     f"📌 *Symbol:* {clean_symbol}\n"
-                    f"⏰ *Timeframe:* 30M (NSE Session)\n"
+                    f"⏰ *Timeframe:* 30M\n"
                     f"🕐 *Candle Time:* {candle_time_str}\n"
-                    f"🎯 *Quality Score:* Q{score}/4\n\n"
-                    f"💵 *Entry Price:* ₹{entry}\n"
-                    f"🛑 *Stop-Loss (SL 50%):* ₹{sl}\n"
-                    f"🎯 *Target 1 (1:1):* ₹{t1}\n"
-                    f"🎯 *Target 2 (1:2):* ₹{t2}\n\n"
+                    f"💵 *Breakout Close:* ₹{close_price}\n\n"
                     f"📊 [Open Chart on TradingView]({tv_link})"
                 )
                 alerts.append(msg)
-                mActive = False
+                mActive = False  # Deactivate after breakout signal
 
         return alerts
     except Exception as e:
@@ -262,7 +205,7 @@ def analyze_mother_candle(symbol):
         return []
 
 def main():
-    print("Scanning Top 100 Stocks for Mother Candle Breakouts...")
+    print("Scanning Top 100 Stocks for Mother Candle Breakouts (CE/PE WAIT)...")
     total_alerts = 0
     for symbol in SYMBOLS:
         alerts = analyze_mother_candle(symbol)
