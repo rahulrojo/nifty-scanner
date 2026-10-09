@@ -52,6 +52,26 @@ def get_tradingview_url(ticker):
         tv_symbol = f"NSE:{clean}"
     return f"https://in.tradingview.com/chart/?symbol={tv_symbol}"
 
+def resample_to_tradingview_30m(df, ist):
+    if df.index.tz is None:
+        df.index = df.index.tz_localize('UTC').tz_convert(ist)
+    else:
+        df.index = df.index.tz_convert(ist)
+
+    # Market Hours Only (09:15 to 15:30 IST)
+    df = df.between_time('09:15', '15:30')
+
+    # Resample 5m -> 30m starting at 09:15 AM IST (Exact TradingView Candles)
+    resampled = df.resample('30min', offset='15min').agg({
+        'Open': 'first',
+        'High': 'max',
+        'Low': 'min',
+        'Close': 'last',
+        'Volume': 'sum'
+    }).dropna()
+
+    return resampled
+
 def calculate_signals(df, length=20, mult_bb=2.0, mult_kc=1.5):
     # 1. Bollinger Bands
     df['sma'] = df['Close'].rolling(window=length).mean()
@@ -59,7 +79,7 @@ def calculate_signals(df, length=20, mult_bb=2.0, mult_kc=1.5):
     df['bb_upper'] = df['sma'] + (mult_bb * df['std'])
     df['bb_lower'] = df['sma'] - (mult_bb * df['std'])
 
-    # 2. Keltner Channels (EMA + TradingView RMA ATR)
+    # 2. Keltner Channels (EMA + RMA ATR)
     df['kc_ema'] = df['Close'].ewm(span=length, adjust=False).mean()
     high_low = df['High'] - df['Low']
     high_close = (df['High'] - df['Close'].shift(1)).abs()
@@ -162,17 +182,15 @@ def main():
     for ticker in SYMBOLS:
         try:
             tk = yf.Ticker(ticker)
-            data = tk.history(period="7d", interval="30m")
+            # Fetch 5m data for accurate resampling
+            raw_data = tk.history(period="7d", interval="5m")
             
-            if data.empty or len(data) < 30:
+            if raw_data.empty or len(raw_data) < 100:
                 continue
 
-            df = calculate_signals(data)
-
-            if df.index.tz is None:
-                df.index = df.index.tz_localize('UTC').tz_convert(ist)
-            else:
-                df.index = df.index.tz_convert(ist)
+            # Resample to TV 30m candles
+            df_30m = resample_to_tradingview_30m(raw_data, ist)
+            df = calculate_signals(df_30m)
 
             df_today = df[df.index.date == today_date].copy()
             if df_today.empty:
@@ -196,7 +214,6 @@ def main():
 
                 msg = None
 
-                # Alerts Logic
                 if row['squeeze_start']:
                     msg = (
                         f"🟡 <b>SQUEEZE STARTED ALERT</b> 🟡\n\n"
