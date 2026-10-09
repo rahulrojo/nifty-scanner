@@ -229,6 +229,7 @@ def fmt(e, tv):
     else:
         head = f"⚡🔴 <b>SQUEEZE RELEASE — SELL</b> (Squeeze {sq_label(e['sq_no'])})"
         body = f"Momentum -ve, Close < EMA | Close: {e['close']:.2f}"
+    body = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return (f"{head}\n📌 <b>{e['name']}</b>\n🕒 Candle: {when}\n{body}\n"
             f"📈 <a href=\"{link}\">TradingView chart</a>")
 
