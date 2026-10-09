@@ -38,6 +38,20 @@ SYMBOLS = [
     "AARTIIND.NS", "APOLLOTYRE.NS", "LICHSGFIN.NS", "EXIDEIND.NS", "IPCALAB.NS"
 ]
 
+def get_tradingview_url(ticker):
+    mapping = {
+        "^NSEI": "NSE:NIFTY",
+        "^NSEBANK": "NSE:BANKNIFTY",
+        "^CNXIT": "NSE:CNXIT",
+        "^NSEMDCP50": "NSE:NIFTY_MID_SELECT"
+    }
+    if ticker in mapping:
+        tv_symbol = mapping[ticker]
+    else:
+        clean = ticker.replace(".NS", "").replace("^", "")
+        tv_symbol = f"NSE:{clean}"
+    return f"https://in.tradingview.com/chart/?symbol={tv_symbol}"
+
 def calculate_signals(df, length=20, mult_bb=2.0, mult_kc=1.5):
     # 1. Bollinger Bands
     df['sma'] = df['Close'].rolling(window=length).mean()
@@ -125,7 +139,8 @@ def send_telegram_message(message):
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
-        "parse_mode": "HTML"
+        "parse_mode": "HTML",
+        "disable_web_page_preview": False
     }
     try:
         res = requests.post(url, json=payload, timeout=10)
@@ -177,6 +192,7 @@ def main():
                 clean_symbol = ticker.replace(".NS", "").replace("^", "")
                 candle_time_str = timestamp.strftime('%I:%M %p')
                 close_price = round(row['Close'], 2)
+                tv_link = get_tradingview_url(ticker)
 
                 msg = None
 
@@ -189,7 +205,8 @@ def main():
                         f"🕒 <b>Candle Time:</b> {candle_time_str}\n"
                         f"🔢 <b>Today's Squeeze No:</b> #{squeeze_count}\n"
                         f"💰 <b>Close Price:</b> ₹{close_price}\n\n"
-                        f"⚡ <i>Status: BB inside Keltner Channel!</i>"
+                        f"⚡ <i>Status: BB inside Keltner Channel!</i>\n"
+                        f"📈 <a href='{tv_link}'>Open Chart in TradingView</a>"
                     )
                 elif row['buy_signal']:
                     msg = (
@@ -198,7 +215,8 @@ def main():
                         f"⏱ <b>Timeframe:</b> 30 Min\n"
                         f"🕒 <b>Candle Time:</b> {candle_time_str}\n"
                         f"💰 <b>Close Price:</b> ₹{close_price}\n\n"
-                        f"🚀 <i>Status: Squeeze Released + Bullish Momentum!</i>"
+                        f"🚀 <i>Status: Squeeze Released + Bullish Momentum!</i>\n"
+                        f"📈 <a href='{tv_link}'>Open Chart in TradingView</a>"
                     )
                 elif row['sell_signal']:
                     msg = (
@@ -207,7 +225,8 @@ def main():
                         f"⏱ <b>Timeframe:</b> 30 Min\n"
                         f"🕒 <b>Candle Time:</b> {candle_time_str}\n"
                         f"💰 <b>Close Price:</b> ₹{close_price}\n\n"
-                        f"🔻 <i>Status: Squeeze Released + Bearish Momentum!</i>"
+                        f"🔻 <i>Status: Squeeze Released + Bearish Momentum!</i>\n"
+                        f"📈 <a href='{tv_link}'>Open Chart in TradingView</a>"
                     )
                 elif row['sq_buy_signal']:
                     msg = (
@@ -216,7 +235,8 @@ def main():
                         f"⏱ <b>Timeframe:</b> 30 Min\n"
                         f"🕒 <b>Candle Time:</b> {candle_time_str}\n"
                         f"💰 <b>Close Price:</b> ₹{close_price}\n\n"
-                        f"🔥 <i>Status: Closed above Squeeze Candle High!</i>"
+                        f"🔥 <i>Status: Closed above Squeeze Candle High!</i>\n"
+                        f"📈 <a href='{tv_link}'>Open Chart in TradingView</a>"
                     )
                 elif row['sq_sell_signal']:
                     msg = (
@@ -225,7 +245,8 @@ def main():
                         f"⏱ <b>Timeframe:</b> 30 Min\n"
                         f"🕒 <b>Candle Time:</b> {candle_time_str}\n"
                         f"💰 <b>Close Price:</b> ₹{close_price}\n\n"
-                        f"💥 <i>Status: Closed below Squeeze Candle Low!</i>"
+                        f"💥 <i>Status: Closed below Squeeze Candle Low!</i>\n"
+                        f"📈 <a href='{tv_link}'>Open Chart in TradingView</a>"
                     )
 
                 if msg:
