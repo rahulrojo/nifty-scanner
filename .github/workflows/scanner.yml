@@ -1,43 +1,48 @@
-name: Squeeze Alerts
+name: 30m Squeeze Scanner
 
 on:
   schedule:
-    # UTC cron. 30m candle band hone ke 3 min baad run (IST 9:48 se 15:48 tak)
-    - cron: '18,48 4-9 * * 1-5'
-    - cron: '18 10 * * 1-5'
-  workflow_dispatch:      # manual run (aaj ke saare messages ke liye pehli baar yahin se chalao)
-
-permissions:
-  contents: write         # state.json commit karne ke liye
-
-concurrency:
-  group: squeeze-alerts
-  cancel-in-progress: false
+    # Runs every 30 minutes between 03:45 UTC (9:15 AM IST) and 10:15 UTC (3:45 PM IST), Mon-Fri
+    - cron: '15,45 3-9 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      scan_mode:
+        description: 'Select Scan Mode'
+        required: true
+        default: 'live'
+        type: choice
+        options:
+          - live
+          - all_today
 
 jobs:
-  run:
+  run-scanner:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v3
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/python-10@v4
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
-      - name: Install dependencies
-        run: pip install yfinance pandas numpy requests
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Run squeeze alerts
+      - name: Run Live Scanner
+        if: "${{ github.event.inputs.scan_mode != 'all_today' }}"
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python squeeze_alerts.py
+        run: python squeeze_scanner.py
 
-      - name: Save state (duplicate alerts rokne ke liye)
-        if: always()
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@users.noreply.github.com"
-          git add -f state.json || true
-          git diff --cached --quiet || (git commit -m "update state" && git pull --rebase && git push)
+      - name: Run All Today's Signals Scanner
+        if: "${{ github.event.inputs.scan_mode == 'all_today' }}"
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python squeeze_scanner.py --all-today
