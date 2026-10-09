@@ -20,6 +20,10 @@ import requests
 import yfinance as yf
 
 IST = ZoneInfo("Asia/Kolkata")
+try:
+    yf.set_tz_cache_location("/tmp/yfcache")   # "database is locked" error se bachne ke liye
+except Exception:
+    pass
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 STATE_FILE = "state.json"
@@ -286,7 +290,7 @@ def main():
         print("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID set nahi hai")
         sys.exit(1)
 
-    print("[info] VERSION v4: html-escape + plain fallback + 5m->30m resample")
+    print("[info] VERSION v5: html-escape + plain fallback + 5m->30m resample + cache fix")
     now = datetime.now(IST)
     today = now.date()
     state = load_state(today.isoformat())
