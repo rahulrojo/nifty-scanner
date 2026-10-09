@@ -253,6 +253,12 @@ def send(text):
             time.sleep(wait + 1)
             continue
         print(f"[err] telegram {r.status_code}: {r.text}")
+        if r.status_code == 400 and payload.get("parse_mode"):
+            # HTML parse fail: plain text mein bhej do (alert miss na ho)
+            import re
+            plain = re.sub(r"<[^>]+>", "", text).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+            payload = {"chat_id": CHAT_ID, "text": plain, "disable_web_page_preview": True}
+            continue
         return False
     return False
 
