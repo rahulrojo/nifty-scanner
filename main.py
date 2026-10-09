@@ -24,7 +24,7 @@ TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 STATE_FILE = "state.json"
 
-INTERVAL = "30m"
+INTERVAL = "5m"         # 5m data lete hain, phir 9:15 se align karke 30m bante hain (TradingView jaisa)
 PERIOD = "20d"          # warm-up ke liye (EMA/ATR seed settle ho jaye)
 BAR_MIN = 30
 
@@ -104,6 +104,12 @@ def fetch_all(uni):
                 if df.index.tz is None:
                     df.index = df.index.tz_localize("UTC")
                 df.index = df.index.tz_convert(IST)
+                # NSE ke 30m candles: 9:15, 9:45 ... 15:15 (last candle sirf 15 min ka)
+                df = df.resample("30min", origin="start_day", offset="9h15min",
+                                 label="left", closed="left").agg(
+                    {"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
+                if df.empty:
+                    continue
                 out[n] = df
             except Exception as e:
                 print(f"[warn] {n}: {e}")
@@ -197,9 +203,14 @@ def sq_label(n):
     return f"#{n}" if n and n > 0 else "(pichle din se chalu)"
 
 
+def bar_end(t0):
+    """Candle ka close time (market 15:30 par band hota hai)"""
+    return min(t0 + timedelta(minutes=BAR_MIN), t0.replace(hour=15, minute=30, second=0, microsecond=0))
+
+
 def fmt(e, tv):
     t0 = e["ts"]
-    t1 = t0 + timedelta(minutes=BAR_MIN)
+    t1 = bar_end(t0)
     when = f"{t0.strftime('%H:%M')}–{t1.strftime('%H:%M')} IST | {t0.strftime('%d %b %Y')}"
     link = f"https://www.tradingview.com/chart/?symbol={tv}&interval={BAR_MIN}"
     k = e["kind"]
@@ -280,7 +291,7 @@ def main():
     all_events = []
     for name, df in data.items():
         # sirf complete (close ho chuki) candles
-        df = df[df.index + timedelta(minutes=BAR_MIN) <= now + timedelta(minutes=1)]
+        df = df[[bar_end(t) <= now + timedelta(minutes=1) for t in df.index]]
         if len(df) < LENGTH * 2:
             continue
         try:
