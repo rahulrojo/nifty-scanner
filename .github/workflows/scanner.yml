@@ -38,11 +38,11 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python squeeze_scanner.py
+        run: python main.py
 
       - name: Run All Today's Signals Scanner
         if: "${{ github.event.inputs.scan_mode == 'all_today' }}"
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python squeeze_scanner.py --all-today
+        run: python main.py --all-today
