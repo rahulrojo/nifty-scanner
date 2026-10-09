@@ -286,6 +286,7 @@ def main():
         print("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID set nahi hai")
         sys.exit(1)
 
+    print("[info] VERSION v4: html-escape + plain fallback + 5m->30m resample")
     now = datetime.now(IST)
     today = now.date()
     state = load_state(today.isoformat())
