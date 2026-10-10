@@ -40,6 +40,7 @@ TOP_N = int(os.getenv("TOP_N", "100"))
 VOL_DAYS = 20
 SEND_TEST = os.getenv("SEND_TEST", "true").lower() == "true"
 ALERT_DAYS = int(os.getenv("ALERT_DAYS", "1"))        # 1 = sirf aaj, 5 = pichle 5 din
+ALERT_DATE = os.getenv("ALERT_DATE", "").strip().lower()  # "yesterday" (kal) ya YYYY-MM-DD: us din ke saare signals dobara bhejo
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -376,6 +377,17 @@ def main() -> None:
 
     now = pd.Timestamp.now(tz=IST)
     sent = load_sent()
+
+    # Replay mode: kal (ya kisi bhi din) ke saare signals bhejo
+    target = None
+    if ALERT_DATE:
+        if ALERT_DATE in ("yesterday", "kal"):
+            dates = sorted({ts.date() for d in data.values() for ts in d.index})
+            prior = [d for d in dates if d < now.date()]
+            target = prior[-1] if prior else None
+        else:
+            target = pd.Timestamp(ALERT_DATE).date()
+
     pending = []
     found_today = 0
     latest = None
@@ -385,24 +397,40 @@ def main() -> None:
                 latest = (ev["time"], names[tk], ev["side"])
             if ev["time"].date() == now.date():
                 found_today += 1
-            if ev["time"].date() < (now - pd.Timedelta(days=ALERT_DAYS - 1)).date():
-                continue
             key = f"{tk}|{ev['side']}|{ev['time'].isoformat()}"
-            if key in sent:
-                continue
+            if target is not None:
+                if ev["time"].date() != target:
+                    continue                      # replay: dedup ignore, sirf us din ke signals
+            else:
+                if ev["time"].date() < (now - pd.Timedelta(days=ALERT_DAYS - 1)).date():
+                    continue
+                if key in sent:
+                    continue
             ev.update(name=names[tk], vol=vol_map.get(tk), key=key, tv=tv_link(tk))
             pending.append(ev)
 
     pending.sort(key=lambda e: e["time"])
     for ev in pending:
-        send_telegram(build_message(ev))
-        sent.append(ev["key"])
+        msg = build_message(ev)
+        if target is not None:
+            msg = f"🔁 {target.strftime('%d-%b-%Y')} KA SIGNAL\n" + msg
+        send_telegram(msg)
+        if target is None:
+            sent.append(ev["key"])
         print("Sent:", ev["key"])
 
-    with open(SENT_FILE, "w") as f:
-        json.dump(sent[-1000:], f)
+    if target is None:
+        with open(SENT_FILE, "w") as f:
+            json.dump(sent[-1000:], f)
 
-    if SEND_TEST:
+    if target is not None:
+        send_telegram(
+            f"📋 {target.strftime('%d-%b-%Y')} ka replay complete\n"
+            f"Symbols scanned: {len(data)} / {len(tickers)}\n"
+            f"Us din ke signals: {len(pending)}"
+            + ("" if pending else "\nKoi Mother Candle signal nahi bana.")
+        )
+    elif SEND_TEST:
         last = max((d.index[-1] for d in data.values()), default=None)
         last_s = last.strftime("%d-%b %I:%M %p") if last is not None else "koi data nahi"
         lb = (f"{latest[1]} {latest[2]} @ {latest[0].strftime('%d-%b %I:%M %p')}") if latest else "koi nahi"
@@ -414,7 +442,6 @@ def main() -> None:
             f"Pichla signal (59 din me): {lb}\n"
             f"Naye signals bheje: {len(pending)}"
         )
-
 
 if __name__ == "__main__":
     main()
