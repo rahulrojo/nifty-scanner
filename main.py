@@ -41,6 +41,7 @@ VOL_DAYS = 20
 SEND_TEST = os.getenv("SEND_TEST", "true").lower() == "true"
 ALERT_DAYS = int(os.getenv("ALERT_DAYS", "1"))        # 1 = sirf aaj, 5 = pichle 5 din
 ALERT_DATE = os.getenv("ALERT_DATE", "").strip().lower()    # optional: "yesterday" ya YYYY-MM-DD, sirf us din ke signals dobara bhejo
+DIAGNOSE_DATE = os.getenv("DIAGNOSE_DATE", "").strip()   # YYYY-MM-DD: us din har mother candle ka natija (sirf ek summary msg)
 REPLAY_ONCE_DATE = os.getenv("REPLAY_ONCE_DATE", "2026-10-09").strip()  # is din ke mother + buy signals EK BAAR bhejo, phir band. Khali = band
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -205,11 +206,14 @@ def run_strategy(df: pd.DataFrame) -> list:
     m_bar = -1
     inside = 0
     announced = False
+    rej = None   # is mother par pehla reject hua breakout ka karan
 
     for i in range(1, n):
         newday = t[i].date() != t[i - 1].date()
         if m_active and (i - m_bar > MAX_BARS or newday):
             m_active = False
+            events.append(dict(kind="MOTHER_END", time=t[i], m_time=t[m_bar],
+                               result=rej or "breakout aaya hi nahi"))
 
         inside_bar = h[i] <= h[i - 1] and l[i] >= l[i - 1]
         new_auto = False
@@ -224,6 +228,7 @@ def run_strategy(df: pd.DataFrame) -> list:
 
         if new_auto:
             m_active = True
+            rej = None
             m_high, m_low, m_vol, m_bar = h[i - 1], l[i - 1], v[i - 1], i - 1
             inside = 1
             last_child = h[i] - l[i]
@@ -281,6 +286,35 @@ def run_strategy(df: pd.DataFrame) -> list:
         ce = common and brk_up and not brk_dn and c[i] > o[i] and trend_ce and vwap_ce and risk_ok_ce
         pe = common and brk_dn and not brk_up and c[i] < o[i] and trend_pe and vwap_pe and risk_ok_pe
 
+        if (close_up or close_dn) and not (ce or pe) and rej is None:
+            up_side = close_up
+            if not armed:
+                rej = "compression kam"
+            elif not in_sig:
+                rej = "signal time ke baad"
+            elif not body_ok:
+                rej = "breakout candle ki body chhoti"
+            elif not size_ok:
+                rej = "breakout candle bahut badi"
+            elif score < MIN_SCORE:
+                rej = "quality score kam"
+            elif up_side and not c[i] > o[i]:
+                rej = "close upar par candle green nahi"
+            elif (not up_side) and not c[i] < o[i]:
+                rej = "close neeche par candle red nahi"
+            elif up_side and not trend_ce:
+                rej = "CE: EMA ke neeche"
+            elif (not up_side) and not trend_pe:
+                rej = "PE: EMA ke upar"
+            elif up_side and not vwap_ce:
+                rej = "CE: VWAP ke neeche"
+            elif (not up_side) and not vwap_pe:
+                rej = "PE: VWAP ke upar"
+            elif (up_side and not risk_ok_ce) or ((not up_side) and not risk_ok_pe):
+                rej = "SL bahut door"
+            else:
+                rej = "clean breakout nahi (mother ko touch kiya)"
+
         if ce or pe:
             side = "CE" if ce else "PE"
             entry = c[i]
@@ -295,6 +329,13 @@ def run_strategy(df: pd.DataFrame) -> list:
 
         if ce or pe or ((not KEEP_ALIVE) and (close_up or close_dn)):
             m_active = False
+            events.append(dict(kind="MOTHER_END", time=t[i], m_time=t[m_bar],
+                               result="BUY" if (ce or pe) else (rej or "reject")))
+
+    # din khatam (3:30 PM candle) par bhi mother active ho to uska natija likho
+    if m_active and ends.iloc[-1].hour * 60 + ends.iloc[-1].minute >= 15 * 60 + 30:
+        events.append(dict(kind="MOTHER_END", time=ends.iloc[-1], m_time=t[m_bar],
+                           result=rej or "din khatam, breakout nahi aaya"))
 
     return events
 
@@ -422,6 +463,8 @@ def main() -> None:
         out = []
         for tk, evs in all_events.items():
             for ev in evs:
+                if ev["kind"] not in ("MOTHER", "BUY"):
+                    continue
                 if not date_ok(ev["time"].date()):
                     continue
                 key = ev_key(tk, ev)
@@ -433,6 +476,17 @@ def main() -> None:
         out.sort(key=lambda e: (e["time"], 0 if e["kind"] == "MOTHER" else 1))
         return out
 
+    def outcome_text(day):
+        cnt = {}
+        for evs in all_events.values():
+            for e in evs:
+                if e["kind"] == "MOTHER_END" and e["m_time"].date() == day:
+                    cnt[e["result"]] = cnt.get(e["result"], 0) + 1
+        if not cnt:
+            return ""
+        items = sorted(cnt.items(), key=lambda x: -x[1])
+        return "\nMother ka natija: " + " | ".join(f"{k}: {v}" for k, v in items)
+
     def replay(day):
         """Kisi ek din ke saare MOTHER + BUY signals bhejo (dedup ignore)."""
         evs = gather(lambda d: d == day, dedup=False)
@@ -440,13 +494,30 @@ def main() -> None:
         for ev in evs:
             send_telegram(tag + build_message(ev))
         n_m = sum(1 for e in evs if e["kind"] == "MOTHER")
-        n_b = len(evs) - n_m
+        n_b = sum(1 for e in evs if e["kind"] == "BUY")
         send_telegram(
             f"📋 {day.strftime('%d-%b-%Y')} ka scan complete\n"
             f"Symbols scanned: {len(data)} / {len(tickers)}\n"
             f"Mother candle: {n_m} | Buy signal: {n_b}"
+            + outcome_text(day)
             + ("" if evs else "\nIs din koi Mother Candle signal nahi bana.")
         )
+
+    # 0) Diagnose: us din har mother ka natija ek hi message me (alert dobara nahi)
+    if DIAGNOSE_DATE:
+        day = pd.Timestamp(DIAGNOSE_DATE).date()
+        rows = sorted(
+            (e["m_time"], names[tk], e["result"])
+            for tk, evs in all_events.items() for e in evs
+            if e["kind"] == "MOTHER_END" and e["m_time"].date() == day
+        )
+        lines = [f"{nm} ({mt.strftime('%I:%M %p')}) -> {res}" for mt, nm, res in rows[:40]]
+        send_telegram(
+            f"🔎 {day.strftime('%d-%b-%Y')} mother candle natija ({len(rows)} mother)"
+            + outcome_text(day) + "\n\n"
+            + ("\n".join(lines) if lines else "Us din koi mother candle poori nahi hui.")
+        )
+        return
 
     # 1) Explicit date: sirf us din ke signals (state nahi badalti)
     target = None
@@ -483,7 +554,7 @@ def main() -> None:
     if SEND_TEST:
         today_evs = [e for evs in all_events.values() for e in evs if e["time"].date() == now.date()]
         n_m = sum(1 for e in today_evs if e["kind"] == "MOTHER")
-        n_b = len(today_evs) - n_m
+        n_b = sum(1 for e in today_evs if e["kind"] == "BUY")
         last = max((d.index[-1] for d in data.values()), default=None)
         last_s = last.strftime("%d-%b %I:%M %p") if last is not None else "koi data nahi"
         buys = [(e["time"], names[tk], e["side"]) for tk, evs in all_events.items() for e in evs if e["kind"] == "BUY"]
@@ -493,7 +564,7 @@ def main() -> None:
             f"📋 Mother Candle scan complete\n"
             f"Symbols scanned: {len(data)} / {len(tickers)}\n"
             f"Last candle start: {last_s} IST\n"
-            f"Aaj mile: {n_m} mother, {n_b} buy signal\n"
+            f"Aaj mile: {n_m} mother, {n_b} buy signal{outcome_text(now.date())}\n"
             f"Pichla BUY signal (59 din me): {lb_s}\n"
             f"Naye alerts bheje: {len(pending)}"
         )
