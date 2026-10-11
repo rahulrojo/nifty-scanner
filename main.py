@@ -41,6 +41,11 @@ VOL_DAYS = 20
 SEND_TEST = os.getenv("SEND_TEST", "true").lower() == "true"
 ALERT_DAYS = int(os.getenv("ALERT_DAYS", "1"))        # 1 = sirf aaj, 5 = pichle 5 din
 ALERT_DATE = os.getenv("ALERT_DATE", "").strip().lower()  # "yesterday" (kal) ya YYYY-MM-DD: us din ke saare signals dobara bhejo
+# GitHub me "Run workflow" (manual) dabane par apne aap kal ke signals (yml me kuch badalne ki zaroorat nahi).
+# Normal manual scan chahiye to env me MANUAL_REPLAY: 'false' kar do. Schedule wale runs normal rehte hain.
+if not ALERT_DATE and os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch" \
+        and os.getenv("MANUAL_REPLAY", "true").lower() == "true":
+    ALERT_DATE = "yesterday"
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
