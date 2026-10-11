@@ -323,7 +323,7 @@ def run_strategy(df: pd.DataFrame) -> list:
             risk = abs(entry - sl)
             sign = 1 if ce else -1
             events.append(dict(
-                kind="BUY", side=side, time=t[i], end=ends.iloc[i], entry=entry, sl=sl,
+                kind="BUY", side=side, time=t[i], end=ends.iloc[i], entry=entry, sl=sl, c_high=h[i], c_low=l[i],
                 t1=entry + sign * risk * RR1, t2=entry + sign * risk * RR2,
                 risk=risk, score=score, m_time=t[m_bar], m_high=m_high, m_low=m_low,
             ))
@@ -349,40 +349,32 @@ def fmt_time(ts) -> str:
 
 
 def build_buy_message(ev: dict) -> str:
-    icon = "🚀" if ev["side"] == "CE" else "💥"
     day = ev["time"].strftime("%d-%b-%Y")
-    stop_t = ev["end"] + pd.Timedelta(minutes=30 * TIME_STOP_BARS)
-    close_t = ev["end"].normalize() + pd.Timedelta(hours=15, minutes=30)
-    stop_t = min(stop_t, close_t)   # intraday: market close (3:30 PM) ke baad nahi
-    vol = f"\n📊 Volatility (20d range): {ev['vol']:.2f}%" if ev.get("vol") else ""
+    if ev["side"] == "CE":
+        head = f"🚀 BUY CE - {ev['name']}"
+        level = f"🔺 Breakout candle High: {ev['c_high']:.2f}"
+    else:
+        head = f"💥 BUY PE - {ev['name']}"
+        level = f"🔻 Breakout candle Low: {ev['c_low']:.2f}"
     return (
-        f"{icon} BUY {ev['side']} NOW - {ev['name']}  (Mother Candle 30m)\n"
-        f"🕒 Breakout Candle: {fmt_time(ev['time'])} - {fmt_time(ev['end'])} IST ({day})\n"
-        f"🟧 Mother Candle: {fmt_time(ev['m_time'])} | High {ev['m_high']:.2f} | Low {ev['m_low']:.2f}\n"
-        f"📍 Entry (candle close): {ev['entry']:.2f}\n"
+        f"{head}\n"
+        f"📅 {day} | 🕒 {fmt_time(ev['time'])} - {fmt_time(ev['end'])}\n"
+        f"{level}\n"
+        f"⭐ Quality: {ev['score']}/4\n"
+        f"🟧 Mother: {fmt_time(ev['m_time'])} | High {ev['m_high']:.2f} | Low {ev['m_low']:.2f}\n"
         f"🛑 Stoploss: {ev['sl']:.2f}\n"
         f"🎯 Target 1: {ev['t1']:.2f} | Target 2: {ev['t2']:.2f}\n"
-        f"⏱ Time stop: {TIME_STOP_BARS} candles ya market close, jo pehle (~{fmt_time(stop_t)}). T1 na aaye to nikal jao\n"
-        f"⭐ Quality: Q{ev['score']}/4{vol}\n"
-        f"(SL/Target underlying price par hain)\n"
-        f"📈 Chart: {ev['tv']}"
+        f"📈 {ev['tv']}"
     )
 
 
 def build_mother_message(ev: dict) -> str:
     day = ev["m_time"].strftime("%d-%b-%Y")
-    close_t = ev["m_end"].normalize() + pd.Timedelta(hours=15, minutes=30)
-    valid_t = min(ev["m_end"] + pd.Timedelta(minutes=30 * MAX_BARS), close_t)
-    vol = f"\n📊 Volatility (20d range): {ev['vol']:.2f}%" if ev.get("vol") else ""
     return (
-        f"🟧 MOTHER CANDLE BANI - {ev['name']}  (30m)\n"
-        f"🕒 Mother Candle: {fmt_time(ev['m_time'])} - {fmt_time(ev['m_end'])} IST ({day})\n"
+        f"🟧 MOTHER CANDLE BANI - {ev['name']}\n"
+        f"📅 {day} | 🕒 {fmt_time(ev['m_time'])} - {fmt_time(ev['m_end'])}\n"
         f"🔺 High: {ev['m_high']:.2f} | 🔻 Low: {ev['m_low']:.2f}\n"
-        f"✅ Confirm: {fmt_time(ev['time'])} - {fmt_time(ev['end'])} wali candle uske andar band hui\n"
-        f"🚀 BUY CE: green candle {ev['m_high']:.2f} ke upar band ho\n"
-        f"💥 BUY PE: red candle {ev['m_low']:.2f} ke neeche band ho\n"
-        f"⏳ Valid: {MAX_BARS} candles ya market close, jo pehle (~{fmt_time(valid_t)}){vol}\n"
-        f"📈 Chart: {ev['tv']}"
+        f"📈 {ev['tv']}"
     )
 
 
@@ -507,7 +499,7 @@ def main() -> None:
     def replay(day, resume=False):
         """Kisi ek din ke saare MOTHER + BUY signals bhejo. resume=True: beech me ruk jaye to wahin se aage badho."""
         evs = gather(lambda d: d == day, dedup=False)
-        tag = f"🔁 {day.strftime('%d-%b-%Y')} KA SIGNAL\n"
+        tag = ""
         for ev in evs:
             rk = "R|" + ev["key"]
             if resume and rk in sent:
