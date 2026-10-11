@@ -40,12 +40,8 @@ TOP_N = int(os.getenv("TOP_N", "100"))
 VOL_DAYS = 20
 SEND_TEST = os.getenv("SEND_TEST", "true").lower() == "true"
 ALERT_DAYS = int(os.getenv("ALERT_DAYS", "1"))        # 1 = sirf aaj, 5 = pichle 5 din
-ALERT_DATE = os.getenv("ALERT_DATE", "").strip().lower()  # "yesterday" (kal) ya YYYY-MM-DD: us din ke saare signals dobara bhejo
-# GitHub me "Run workflow" (manual) dabane par apne aap kal ke signals (yml me kuch badalne ki zaroorat nahi).
-# Normal manual scan chahiye to env me MANUAL_REPLAY: 'false' kar do. Schedule wale runs normal rehte hain.
-if not ALERT_DATE and os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch" \
-        and os.getenv("MANUAL_REPLAY", "true").lower() == "true":
-    ALERT_DATE = "yesterday"
+ALERT_DATE = os.getenv("ALERT_DATE", "").strip().lower()    # optional: "yesterday" ya YYYY-MM-DD, sirf us din ke signals dobara bhejo
+REPLAY_ONCE_DATE = os.getenv("REPLAY_ONCE_DATE", "2026-10-09").strip()  # is din ke mother + buy signals EK BAAR bhejo, phir band. Khali = band
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -208,6 +204,7 @@ def run_strategy(df: pd.DataFrame) -> list:
     m_high = m_low = m_vol = last_child = np.nan
     m_bar = -1
     inside = 0
+    announced = False
 
     for i in range(1, n):
         newday = t[i].date() != t[i - 1].date()
@@ -233,6 +230,16 @@ def run_strategy(df: pd.DataFrame) -> list:
         elif m_active and i > m_bar and h[i] <= m_high and l[i] >= m_low:
             inside += 1
             last_child = h[i] - l[i]
+
+        # mother candle ready (inside candles poori hui) -> MOTHER alert event
+        if new_auto:
+            announced = False
+        if m_active and not announced and inside >= MIN_INSIDE:
+            announced = True
+            events.append(dict(
+                kind="MOTHER", time=t[i], end=ends.iloc[i],
+                m_time=t[m_bar], m_end=ends.iloc[m_bar], m_high=m_high, m_low=m_low,
+            ))
 
         if not (m_active and i > m_bar):
             continue
@@ -281,7 +288,7 @@ def run_strategy(df: pd.DataFrame) -> list:
             risk = abs(entry - sl)
             sign = 1 if ce else -1
             events.append(dict(
-                side=side, time=t[i], end=ends.iloc[i], entry=entry, sl=sl,
+                kind="BUY", side=side, time=t[i], end=ends.iloc[i], entry=entry, sl=sl,
                 t1=entry + sign * risk * RR1, t2=entry + sign * risk * RR2,
                 risk=risk, score=score, m_time=t[m_bar], m_high=m_high, m_low=m_low,
             ))
@@ -299,7 +306,7 @@ def fmt_time(ts) -> str:
     return ts.strftime("%I:%M %p")
 
 
-def build_message(ev: dict) -> str:
+def build_buy_message(ev: dict) -> str:
     icon = "🚀" if ev["side"] == "CE" else "💥"
     day = ev["time"].strftime("%d-%b-%Y")
     stop_t = ev["end"] + pd.Timedelta(minutes=30 * TIME_STOP_BARS)
@@ -318,6 +325,27 @@ def build_message(ev: dict) -> str:
         f"(SL/Target underlying price par hain)\n"
         f"📈 Chart: {ev['tv']}"
     )
+
+
+def build_mother_message(ev: dict) -> str:
+    day = ev["m_time"].strftime("%d-%b-%Y")
+    close_t = ev["m_end"].normalize() + pd.Timedelta(hours=15, minutes=30)
+    valid_t = min(ev["m_end"] + pd.Timedelta(minutes=30 * MAX_BARS), close_t)
+    vol = f"\n📊 Volatility (20d range): {ev['vol']:.2f}%" if ev.get("vol") else ""
+    return (
+        f"🟧 MOTHER CANDLE BANI - {ev['name']}  (30m)\n"
+        f"🕒 Mother Candle: {fmt_time(ev['m_time'])} - {fmt_time(ev['m_end'])} IST ({day})\n"
+        f"🔺 High: {ev['m_high']:.2f} | 🔻 Low: {ev['m_low']:.2f}\n"
+        f"✅ Confirm: {fmt_time(ev['time'])} - {fmt_time(ev['end'])} wali candle uske andar band hui\n"
+        f"🚀 BUY CE: green candle {ev['m_high']:.2f} ke upar band ho\n"
+        f"💥 BUY PE: red candle {ev['m_low']:.2f} ke neeche band ho\n"
+        f"⏳ Valid: {MAX_BARS} candles ya market close, jo pehle (~{fmt_time(valid_t)}){vol}\n"
+        f"📈 Chart: {ev['tv']}"
+    )
+
+
+def build_message(ev: dict) -> str:
+    return build_mother_message(ev) if ev.get("kind") == "MOTHER" else build_buy_message(ev)
 
 
 def send_telegram(text: str) -> None:
@@ -383,8 +411,44 @@ def main() -> None:
 
     now = pd.Timestamp.now(tz=IST)
     sent = load_sent()
+    all_events = {tk: run_strategy(df) for tk, df in data.items()}
 
-    # Replay mode: kal (ya kisi bhi din) ke saare signals bhejo
+    def ev_key(tk, ev):
+        if ev["kind"] == "MOTHER":
+            return f"{tk}|MOTHER|{ev['m_time'].isoformat()}"
+        return f"{tk}|{ev['side']}|{ev['time'].isoformat()}"
+
+    def gather(date_ok, dedup):
+        out = []
+        for tk, evs in all_events.items():
+            for ev in evs:
+                if not date_ok(ev["time"].date()):
+                    continue
+                key = ev_key(tk, ev)
+                if dedup and key in sent:
+                    continue
+                e = dict(ev)
+                e.update(name=names[tk], vol=vol_map.get(tk), key=key, tv=tv_link(tk))
+                out.append(e)
+        out.sort(key=lambda e: (e["time"], 0 if e["kind"] == "MOTHER" else 1))
+        return out
+
+    def replay(day):
+        """Kisi ek din ke saare MOTHER + BUY signals bhejo (dedup ignore)."""
+        evs = gather(lambda d: d == day, dedup=False)
+        tag = f"🔁 {day.strftime('%d-%b-%Y')} KA SIGNAL\n"
+        for ev in evs:
+            send_telegram(tag + build_message(ev))
+        n_m = sum(1 for e in evs if e["kind"] == "MOTHER")
+        n_b = len(evs) - n_m
+        send_telegram(
+            f"📋 {day.strftime('%d-%b-%Y')} ka scan complete\n"
+            f"Symbols scanned: {len(data)} / {len(tickers)}\n"
+            f"Mother candle: {n_m} | Buy signal: {n_b}"
+            + ("" if evs else "\nIs din koi Mother Candle signal nahi bana.")
+        )
+
+    # 1) Explicit date: sirf us din ke signals (state nahi badalti)
     target = None
     if ALERT_DATE:
         if ALERT_DATE in ("yesterday", "kal"):
@@ -393,60 +457,45 @@ def main() -> None:
             target = prior[-1] if prior else None
         else:
             target = pd.Timestamp(ALERT_DATE).date()
+    if target is not None:
+        replay(target)
+        return
 
-    pending = []
-    found_today = 0
-    latest = None
-    for tk, df in data.items():
-        for ev in run_strategy(df):
-            if latest is None or ev["time"] > latest[0]:
-                latest = (ev["time"], names[tk], ev["side"])
-            if ev["time"].date() == now.date():
-                found_today += 1
-            key = f"{tk}|{ev['side']}|{ev['time'].isoformat()}"
-            if target is not None:
-                if ev["time"].date() != target:
-                    continue                      # replay: dedup ignore, sirf us din ke signals
-            else:
-                if ev["time"].date() < (now - pd.Timedelta(days=ALERT_DAYS - 1)).date():
-                    continue
-                if key in sent:
-                    continue
-            ev.update(name=names[tk], vol=vol_map.get(tk), key=key, tv=tv_link(tk))
-            pending.append(ev)
+    # 2) Ek baar: REPLAY_ONCE_DATE ke dono signals (mother + buy). Phir dobara nahi.
+    if REPLAY_ONCE_DATE:
+        rkey = f"REPLAY|{REPLAY_ONCE_DATE}"
+        rday = pd.Timestamp(REPLAY_ONCE_DATE).date()
+        if rkey not in sent and rday < now.date():
+            replay(rday)
+            sent.append(rkey)
 
-    pending.sort(key=lambda e: e["time"])
+    # 3) Normal: jis din scan karo, usi din ke signals (mother + buy)
+    lo = (now - pd.Timedelta(days=ALERT_DAYS - 1)).date()
+    pending = gather(lambda d: d >= lo, dedup=True)
     for ev in pending:
-        msg = build_message(ev)
-        if target is not None:
-            msg = f"🔁 {target.strftime('%d-%b-%Y')} KA SIGNAL\n" + msg
-        send_telegram(msg)
-        if target is None:
-            sent.append(ev["key"])
+        send_telegram(build_message(ev))
+        sent.append(ev["key"])
         print("Sent:", ev["key"])
 
-    if target is None:
-        with open(SENT_FILE, "w") as f:
-            json.dump(sent[-1000:], f)
+    with open(SENT_FILE, "w") as f:
+        json.dump(sent[-1500:], f)
 
-    if target is not None:
-        send_telegram(
-            f"📋 {target.strftime('%d-%b-%Y')} ka replay complete\n"
-            f"Symbols scanned: {len(data)} / {len(tickers)}\n"
-            f"Us din ke signals: {len(pending)}"
-            + ("" if pending else "\nKoi Mother Candle signal nahi bana.")
-        )
-    elif SEND_TEST:
+    if SEND_TEST:
+        today_evs = [e for evs in all_events.values() for e in evs if e["time"].date() == now.date()]
+        n_m = sum(1 for e in today_evs if e["kind"] == "MOTHER")
+        n_b = len(today_evs) - n_m
         last = max((d.index[-1] for d in data.values()), default=None)
         last_s = last.strftime("%d-%b %I:%M %p") if last is not None else "koi data nahi"
-        lb = (f"{latest[1]} {latest[2]} @ {latest[0].strftime('%d-%b %I:%M %p')}") if latest else "koi nahi"
+        buys = [(e["time"], names[tk], e["side"]) for tk, evs in all_events.items() for e in evs if e["kind"] == "BUY"]
+        lb = max(buys) if buys else None
+        lb_s = f"{lb[1]} {lb[2]} @ {lb[0].strftime('%d-%b %I:%M %p')}" if lb else "koi nahi"
         send_telegram(
             f"📋 Mother Candle scan complete\n"
             f"Symbols scanned: {len(data)} / {len(tickers)}\n"
             f"Last candle start: {last_s} IST\n"
-            f"Aaj mile: {found_today} signal\n"
-            f"Pichla signal (59 din me): {lb}\n"
-            f"Naye signals bheje: {len(pending)}"
+            f"Aaj mile: {n_m} mother, {n_b} buy signal\n"
+            f"Pichla BUY signal (59 din me): {lb_s}\n"
+            f"Naye alerts bheje: {len(pending)}"
         )
 
 if __name__ == "__main__":
