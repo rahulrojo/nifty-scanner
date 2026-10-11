@@ -364,7 +364,8 @@ def main() -> None:
 
     if SEND_TEST:
         now_s = pd.Timestamp.now(tz=IST).strftime("%d-%b-%Y %I:%M %p")
-        send_telegram(f"✅ Mother Candle 30m TEST - bot connected.\nRun time: {now_s} IST")
+        mode_s = f"REPLAY ({ALERT_DATE})" if ALERT_DATE else "NORMAL (aaj ke signals)"
+        send_telegram(f"✅ Mother Candle 30m TEST - bot connected.\nRun time: {now_s} IST\nMode: {mode_s}")
 
     vol_map = top_volatile_stocks(TOP_N)
     names = dict(INDICES)
