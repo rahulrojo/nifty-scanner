@@ -36,6 +36,7 @@ RR1, RR2 = 1.0, 2.0
 MAX_RISK_ATR = 2.0
 TIME_STOP_BARS = int(os.getenv("TIME_STOP_BARS", "6"))  # script jaisa: 6 candles
 
+TG_DELAY = float(os.getenv("TG_DELAY", "3.2"))   # do messages ke beech ka gap (seconds)
 TOP_N = int(os.getenv("TOP_N", "100"))
 VOL_DAYS = 20
 SEND_TEST = os.getenv("SEND_TEST", "true").lower() == "true"
@@ -393,13 +394,24 @@ def send_telegram(text: str) -> None:
     if not TOKEN or not CHAT_ID:
         print("Telegram secrets missing!")
         sys.exit(1)
-    r = requests.post(
-        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        data={"chat_id": CHAT_ID, "text": text},
-        timeout=20,
-    )
-    r.raise_for_status()
-    time.sleep(0.5)
+    for attempt in range(8):
+        r = requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            data={"chat_id": CHAT_ID, "text": text},
+            timeout=20,
+        )
+        if r.status_code == 429:                       # Too Many Requests: Telegram jitna bole utna ruko
+            try:
+                wait = int(r.json().get("parameters", {}).get("retry_after", 5))
+            except Exception:
+                wait = 5
+            print(f"Telegram 429: {wait}s ruk raha hoon (koshish {attempt + 1})")
+            time.sleep(wait + 1)
+            continue
+        r.raise_for_status()
+        time.sleep(TG_DELAY)                           # channel/group limit (~20 msg/min) se bachne ke liye
+        return
+    raise RuntimeError("Telegram baar-baar 429 de raha hai")
 
 
 # ------------------------------------------------------------------
@@ -410,6 +422,11 @@ def load_sent() -> list:
         with open(SENT_FILE) as f:
             return json.load(f)
     return []
+
+
+def save_sent(sent: list) -> None:
+    with open(SENT_FILE, "w") as f:
+        json.dump(sent[-1500:], f)
 
 
 def check_mode(sym: str, date_str: str) -> None:
@@ -487,12 +504,18 @@ def main() -> None:
         items = sorted(cnt.items(), key=lambda x: -x[1])
         return "\nMother ka natija: " + " | ".join(f"{k}: {v}" for k, v in items)
 
-    def replay(day):
-        """Kisi ek din ke saare MOTHER + BUY signals bhejo (dedup ignore)."""
+    def replay(day, resume=False):
+        """Kisi ek din ke saare MOTHER + BUY signals bhejo. resume=True: beech me ruk jaye to wahin se aage badho."""
         evs = gather(lambda d: d == day, dedup=False)
         tag = f"🔁 {day.strftime('%d-%b-%Y')} KA SIGNAL\n"
         for ev in evs:
+            rk = "R|" + ev["key"]
+            if resume and rk in sent:
+                continue
             send_telegram(tag + build_message(ev))
+            if resume:
+                sent.append(rk)
+                save_sent(sent)
         n_m = sum(1 for e in evs if e["kind"] == "MOTHER")
         n_b = sum(1 for e in evs if e["kind"] == "BUY")
         send_telegram(
@@ -537,8 +560,9 @@ def main() -> None:
         rkey = f"REPLAY|{REPLAY_ONCE_DATE}"
         rday = pd.Timestamp(REPLAY_ONCE_DATE).date()
         if rkey not in sent and rday < now.date():
-            replay(rday)
+            replay(rday, resume=True)
             sent.append(rkey)
+            save_sent(sent)
 
     # 3) Normal: jis din scan karo, usi din ke signals (mother + buy)
     lo = (now - pd.Timedelta(days=ALERT_DAYS - 1)).date()
@@ -546,10 +570,10 @@ def main() -> None:
     for ev in pending:
         send_telegram(build_message(ev))
         sent.append(ev["key"])
+        save_sent(sent)                      # har msg ke baad save: beech me fail ho to duplicate na aaye
         print("Sent:", ev["key"])
 
-    with open(SENT_FILE, "w") as f:
-        json.dump(sent[-1500:], f)
+    save_sent(sent)
 
     if SEND_TEST:
         today_evs = [e for evs in all_events.values() for e in evs if e["time"].date() == now.date()]
