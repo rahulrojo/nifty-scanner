@@ -1,7 +1,6 @@
 import os
 from datetime import datetime
 import pandas as pd
-import pandas_ta as ta
 import requests
 import yfinance as yf
 
@@ -9,7 +8,7 @@ import yfinance as yf
 TIMEFRAME = "30m"
 PERIOD = "5d"
 
-# Major F&O Indexes + Top Liquid F&O Stocks List
+# Major F&O Indexes + Top 100 Liquid F&O Stocks List
 SYMBOLS = [
     # Top Major Indexes
     "^NSEI",
@@ -156,17 +155,23 @@ def scan_symbol(ticker):
     if df is None or df.empty or len(df) < 30:
       return
 
-    # Safely handle MultiIndex columns if returned by yfinance
+    # Handle MultiIndex columns if returned by yfinance
     if isinstance(df.columns, pd.MultiIndex):
       df.columns = [col[0] for col in df.columns]
 
-    # Ensure required columns exist
     required_cols = ["Open", "High", "Low", "Close", "Volume"]
     for col in required_cols:
       if col not in df.columns:
         return
 
-    df["ATR"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+    # Pure Pandas ATR & EMA calculation (No pandas-ta dependency)
+    prev_close = df["Close"].shift(1)
+    tr1 = df["High"] - df["Low"]
+    tr2 = (df["High"] - prev_close).abs()
+    tr3 = (df["Low"] - prev_close).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    df["ATR"] = tr.rolling(window=14).mean()
     df["Body"] = (df["Close"] - df["Open"]).abs()
     df["Range"] = df["High"] - df["Low"]
 
