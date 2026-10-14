@@ -22,7 +22,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas pandas_ta yfinance requests
+          pip install pandas pandas-ta yfinance requests
 
       - name: Run Scanner Script
         env:
