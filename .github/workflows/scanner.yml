@@ -1,43 +1,32 @@
-name: ROMYO 30m Scanner
+name: Mother Candle 30m Scanner
 
 on:
-  workflow_dispatch:
   schedule:
-    # GitHub cron is UTC. These runs are approximately 10:02–15:32 IST
-    # and are intentionally near completed 30-minute candles.
-    - cron: "32 4-9 * * 1-5"
-
-permissions:
-  contents: write
-
-concurrency:
-  group: romyo-30m-scanner
-  cancel-in-progress: false
+    # Runs every 30 mins from Mon-Fri during market hours (03:45 - 10:00 UTC / 09:15 - 15:30 IST)
+    - cron: '45 3-10 * * 1-5'
+    - cron: '15 4-10 * * 1-5'
+  workflow_dispatch:
 
 jobs:
-  scan:
+  run-scanner:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: pip
+          python-version: '3.10'
 
-      - name: Install dependencies
-        run: | python -m pip install --upgrade pip pip install yfinance pandas numpy requests 
-      - name: Run scanner
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas pandas_ta yfinance requests
+
+      - name: Run Scanner Script
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          SEND_TEST_MESSAGE: "false"
-          MOTHER_MODE: "Auto"
-        run: python main.py
-
-      - name: Save duplicate-protection state
-        if: always()
-        run: | if [ -f signal_state.json ]; then git config user.name "github-actions[bot]" git config user.email "41898282+github-actions[bot]@users.noreply.github.com" git add signal_state.json if ! git diff --cached --quiet; then git commit -m "Update ROMYO signal state [skip ci]" git push fi fi
+        run: |
+          python main.py
