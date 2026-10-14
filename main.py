@@ -19,7 +19,7 @@ import requests
 import yfinance as yf
 
 # ===================== SETTINGS (Pine inputs ke same defaults) =====================
-INTERVAL = "30m"
+INTERVAL = "15m"             # Yahoo ka "30m" 09:00/09:30 par bina-align hota hai, isliye 15m lekar khud 09:15 se 30m banate hain
 PERIOD = "30d"                 # yfinance 30m max ~60 din; warm-up ke liye 30d kaafi
 BAR_MIN = 30
 
@@ -68,8 +68,8 @@ STOCKS = """
 ADANIENT ADANIPORTS APOLLOHOSP ASIANPAINT AXISBANK BAJFINANCE BAJAJFINSV BHARTIARTL BPCL BRITANNIA
 CIPLA COALINDIA DIVISLAB DRREDDY EICHERMOT GRASIM HCLTECH HDFCBANK HDFCLIFE HEROMOTOCO HINDALCO
 HINDUNILVR ICICIBANK INDUSINDBK INFY ITC JSWSTEEL KOTAKBANK LT M&M MARUTI NESTLEIND NTPC ONGC
-POWERGRID RELIANCE SBILIFE SBIN SUNPHARMA TATACONSUMER TATASTEEL TCS TECHM TITAN ULTRACEMCO WIPRO
-ABB ADANIGREEN ADANIPOWER AMBUJACEM BANDHANBNK BANKBARODA BEL BHEL BIOCON CANBK CHOLAFIN CUMMINS
+POWERGRID RELIANCE SBILIFE SBIN SUNPHARMA TATASTEEL TCS TECHM TITAN ULTRACEMCO WIPRO
+ABB ADANIGREEN ADANIPOWER AMBUJACEM BANDHANBNK BANKBARODA BEL BHEL BIOCON CANBK CHOLAFIN 
 DLF DABUR DIXON GAIL GODREJCP GODREJPROP HAL HAVELLS ICICIPRULI IDFCFIRSTB IEX IGL INDIGO IOC IRCTC
 IRFC JINDALSTEL JIOFIN JUBLFOOD LICHSGFIN LUPIN MANAPPURAM MARICO MAXHEALTH MFSL MPHASIS MUTHOOTFIN
 NMDC OBEROIRLTY OFSS PAGEIND PERSISTENT PETRONET PFC PIDILITIND PNB POLYCAB RECLTD SAIL SHREECEM
@@ -272,6 +272,13 @@ def scan_symbol(df, name=""):
 
 
 # ===================== DATA =====================
+def to_30m(df):
+    """15m -> 30m, candles 09:15-09:45, 09:45-10:15 ... 15:15-15:30 (TradingView jaisa)."""
+    agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+    out = df.resample("30min", offset="15min", closed="left", label="left").agg(agg)
+    return out.dropna(subset=["Open", "High", "Low", "Close"])
+
+
 def fetch_all(tickers):
     data = {}
     now = pd.Timestamp.now(tz=IST)
@@ -292,7 +299,12 @@ def fetch_all(tickers):
                 if df.index.tz is None:
                     df.index = df.index.tz_localize("UTC")
                 df.index = df.index.tz_convert(IST)
-                df = df[df.index + pd.Timedelta(minutes=BAR_MIN) <= now]   # chalti candle hatao
+                df = to_30m(df)
+                # candle complete tabhi maano jab uska end ho chuka ho (aakhri 15:15 candle 15:30 pe khatam)
+                mins = df.index.hour * 60 + df.index.minute
+                span = np.where(mins >= 15 * 60 + 15, 15, BAR_MIN)
+                ends = df.index + pd.to_timedelta(span, unit="m")
+                df = df[ends <= now]
                 if len(df):
                     data[t] = df
             except Exception:
@@ -377,7 +389,7 @@ def main():
         scan_dates = {pd.Timestamp.now(tz=IST).strftime("%Y-%m-%d")}
     print("Scan dates:", sorted(scan_dates))
 
-    if os.environ.get("TEST_MESSAGE") == "1":
+    if os.environ.get("TEST_MESSAGE") == "1" or raw_dates:
         ok = send_telegram("✅ Test message - Mother Candle scanner Telegram se connected hai.")
         print("Test message sent:", ok)
 
@@ -416,7 +428,7 @@ def main():
                f"last candle {last_bar.strftime('%d %b %H:%M') if last_bar is not None else 'NA'}, "
                f"mother {mothers}, breakout {brks}, BUY signals {len(new_alerts)}")
     print(summary)
-    if os.environ.get("DEBUG_SUMMARY") == "1":
+    if os.environ.get("DEBUG_SUMMARY") == "1" or raw_dates:
         send_telegram("🔎 " + summary)
 
     save_state(sent)
