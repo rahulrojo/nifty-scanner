@@ -118,7 +118,10 @@ def in_sess(ts, sess):
 
 
 # ===================== STRATEGY (bar-by-bar, Pine jaisa) =====================
-def scan_symbol(df):
+EVENTS = []   # debug: (kind, name, time)
+
+
+def scan_symbol(df, name=""):
     o = df["Open"].to_numpy(float)
     h = df["High"].to_numpy(float)
     l = df["Low"].to_numpy(float)
@@ -170,6 +173,7 @@ def scan_symbol(df):
             mActive = True
             insideCount = 1
             lastChild = h[i] - l[i]
+            EVENTS.append(("mother", name, times[i - 1]))
         elif mActive and i > mBar and h[i] <= mHigh and l[i] >= mLow:
             insideCount += 1
             lastChild = h[i] - l[i]
@@ -215,8 +219,10 @@ def scan_symbol(df):
 
         if breakoutUp:
             pendCE, pendCEHigh, pendCEBar = True, h[i], i
+            EVENTS.append(("breakout", name, times[i]))
         if breakoutDn:
             pendPE, pendPELow, pendPEBar = True, l[i], i
+            EVENTS.append(("breakout", name, times[i]))
 
         if PENDING_MAX_BARS and pendCE and i - pendCEBar > PENDING_MAX_BARS:
             pendCE = False
@@ -356,26 +362,33 @@ def save_state(keys):
 
 # ===================== MAIN =====================
 def main():
-    scan_date = os.environ.get("SCAN_DATE", "").strip()
-    if not scan_date:
-        scan_date = pd.Timestamp.now(tz=IST).strftime("%Y-%m-%d")
-    print("Scan date:", scan_date)
+    raw_dates = os.environ.get("SCAN_DATE", "").strip()
+    if raw_dates:
+        scan_dates = {d.strip() for d in raw_dates.split(",") if d.strip()}
+    else:
+        scan_dates = {pd.Timestamp.now(tz=IST).strftime("%Y-%m-%d")}
+    print("Scan dates:", sorted(scan_dates))
+
+    if os.environ.get("TEST_MESSAGE") == "1":
+        ok = send_telegram("✅ Test message - Mother Candle scanner Telegram se connected hai.")
+        print("Test message sent:", ok)
 
     universe = build_universe()
     data = fetch_all(list(universe.keys()))
     print(f"Data mila: {len(data)}/{len(universe)} symbols")
+    last_bar = max((df.index[-1] for df in data.values()), default=None)
 
     sent = load_state()
     new_alerts = []
     for tkr, df in data.items():
         name, tv_sym = universe[tkr]
         try:
-            sigs = scan_symbol(df)
+            sigs = scan_symbol(df, name)
         except Exception as e:
             print("scan error", tkr, e)
             continue
         for s in sigs:
-            if s["time"].strftime("%Y-%m-%d") != scan_date:
+            if s["time"].strftime("%Y-%m-%d") not in scan_dates:
                 continue
             key = f"{name}|{s['side']}|{s['time'].strftime('%Y-%m-%d %H:%M')}"
             if key in sent:
@@ -388,6 +401,15 @@ def main():
         if send_telegram(msg):
             sent.add(key)
         time.sleep(1.1)
+
+    mothers = sum(1 for k, _, t in EVENTS if k == "mother" and t.strftime("%Y-%m-%d") in scan_dates)
+    brks = sum(1 for k, _, t in EVENTS if k == "breakout" and t.strftime("%Y-%m-%d") in scan_dates)
+    summary = (f"Scan {', '.join(sorted(scan_dates))}: data {len(data)}/{len(universe)} symbols, "
+               f"last candle {last_bar.strftime('%d %b %H:%M') if last_bar is not None else 'NA'}, "
+               f"mother {mothers}, breakout {brks}, BUY signals {len(new_alerts)}")
+    print(summary)
+    if os.environ.get("DEBUG_SUMMARY") == "1":
+        send_telegram("🔎 " + summary)
 
     save_state(sent)
 
