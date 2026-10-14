@@ -1,51 +1,57 @@
-name: Mother Candle Scanner
+name: Romyo 30 Minute CE PE Scanner
 
 on:
-  schedule:
-    # 30m candle close ke baad (IST 09:47 se 15:47), Mon-Fri.  UTC = IST - 5:30
-    - cron: "17,47 4-9 * * 1-5"
-    - cron: "17 10 * * 1-5"
   workflow_dispatch:
-    inputs:
-      scan_date:
-        description: "Kisi purane din ke signals chahiye? YYYY-MM-DD (khali = aaj)"
-        required: false
-        default: ""
+
+  schedule:
+    # Runs every 30 minutes during the Indian market session.
+    # GitHub Actions uses UTC.
+    - cron: "0,30 3-10 * * 1-5"
 
 permissions:
   contents: write
 
 concurrency:
-  group: mother-candle-scanner
+  group: romyo-scanner
   cancel-in-progress: false
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    timeout-minutes: 30
 
-      - uses: actions/setup-python@v5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
-      - name: Install
-        run: pip install yfinance pandas numpy requests
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas numpy requests
 
-      - name: Run scanner
+      - name: Run Romyo scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          SCAN_DATE: ${{ github.event.inputs.scan_date }}
-        run: python main.py
-
-      - name: Save sent-state
+          TZ: Asia/Kolkata
         run: |
-          git config user.name "scanner-bot"
-          git config user.email "scanner-bot@users.noreply.github.com"
-          git add sent_signals.json || true
-          if ! git diff --cached --quiet; then
-            git commit -m "update sent signals"
-            git pull --rebase
-            git push
+          python main.py
+
+      - name: Save duplicate protection state
+        if: always()
+        run: |
+          if [ -f signal_state.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add signal_state.json
+            git diff --cached --quiet || (
+              git commit -m "Update Romyo signal state" &&
+              git push
+            )
           fi
