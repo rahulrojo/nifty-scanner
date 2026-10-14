@@ -7,16 +7,16 @@ import yfinance as yf
 
 # ===== CONFIGURATION =====
 TIMEFRAME = "30m"
-PERIOD = "5d"  # 30m data ke liye yfinance 5-7 days ka data support karta hai
+PERIOD = "5d"
 
-# Major F&O Indexes + Top 100 Liquid F&O Stocks List
+# Major F&O Indexes + Top Liquid F&O Stocks List
 SYMBOLS = [
     # Top Major Indexes
     "^NSEI",
     "^NSEBANK",
-    "FINNIFTY.NS",
+    "NIFTY_FIN_SERVICE.NS",
     "NIFTY_MID_SELECT.NS",
-    # Top F&O Stocks (Liquid & High Volume)
+    # Top F&O Stocks
     "RELIANCE.NS",
     "TCS.NS",
     "INFY.NS",
@@ -122,8 +122,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 def send_telegram_message(message):
   if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-    print("Telegram credentials missing! Printing message:")
-    print(message)
+    print("Telegram credentials missing!")
     return
   url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
   payload = {
@@ -139,59 +138,61 @@ def send_telegram_message(message):
 
 
 def get_tv_link(ticker):
-  """TradingView chart URL generator."""
   symbol_map = {
       "^NSEI": "NIFTY",
       "^NSEBANK": "BANKNIFTY",
-      "FINNIFTY.NS": "FINNIFTY",
+      "NIFTY_FIN_SERVICE.NS": "FINNIFTY",
       "NIFTY_MID_SELECT.NS": "MIDCPNIFTY",
   }
-
-  if ticker in symbol_map:
-    tv_symbol = symbol_map[ticker]
-  else:
-    tv_symbol = ticker.replace(".NS", "")
-
+  tv_symbol = symbol_map.get(ticker, ticker.replace(".NS", ""))
   return f"https://in.tradingview.com/chart/?symbol=NSE:{tv_symbol}&interval=30"
 
 
 def scan_symbol(ticker):
   try:
-    print(f"Scanning {ticker}...")
     df = yf.download(
         ticker, period=PERIOD, interval=TIMEFRAME, progress=False
     )
-    if df.empty or len(df) < 30:
+    if df is None or df.empty or len(df) < 30:
       return
 
-    # MultiIndex column flatten kar rahe hain
+    # Safely handle MultiIndex columns if returned by yfinance
     if isinstance(df.columns, pd.MultiIndex):
-      df.columns = df.columns.get_level_0
+      df.columns = [col[0] for col in df.columns]
+
+    # Ensure required columns exist
+    required_cols = ["Open", "High", "Low", "Close", "Volume"]
+    for col in required_cols:
+      if col not in df.columns:
+        return
 
     df["ATR"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
-    df["EMA"] = ta.ema(df["Close"], length=21)
     df["Body"] = (df["Close"] - df["Open"]).abs()
     df["Range"] = df["High"] - df["Low"]
 
-    # Recent candles check (latest completed candle)
+    df = df.dropna()
+    if len(df) < 15:
+      return
+
+    # Check latest completed candles
     for i in range(len(df) - 2, len(df)):
-      if i < 15:
+      if i < 2:
         continue
 
       row = df.iloc[i]
       prev = df.iloc[i - 1]
+      prev_prev = df.iloc[i - 2]
       curr_date = df.index[i]
 
-      # Step 1: Mother Candle Check (Previous Candle)
-      inside_bar = (
-          prev["High"] <= df.iloc[i - 2]["High"]
-          and prev["Low"] >= df.iloc[i - 2]["Low"]
-      )
+      # Mother Candle Check (Previous Candle)
+      inside_bar = prev["High"] <= prev_prev["High"] and prev["Low"] >= prev_prev["Low"]
       c_range = prev["Range"]
       c_body = prev["Body"]
       c_atr = prev["ATR"]
 
-      # Pine Script conditions match
+      if pd.isna(c_atr) or c_atr == 0:
+        continue
+
       c_ok = (
           c_range >= 1.0 * c_atr
           and c_range <= 2.5 * c_atr
@@ -202,48 +203,51 @@ def scan_symbol(ticker):
         m_high = prev["High"]
         m_low = prev["Low"]
         m_mid = (m_high + m_low) / 2
-
         tv_link = get_tv_link(ticker)
         clean_name = ticker.replace(".NS", "").replace("^", "")
 
-        # Step 2: Confirmation Candle (Breakout Above Mother High)
+        # Breakout Up (BUY CE)
         if row["Close"] > m_high and row["Close"] > row["Open"]:
           entry = row["Close"]
           sl = m_mid
           risk = entry - sl
+          if risk <= 0:
+            continue
           t1 = entry + (risk * 1.0)
           t2 = entry + (risk * 2.0)
 
           msg = (
               f"🚀 *BUY CE SIGNAL* 🚀\n\n"
               f"📊 *Symbol:* `{clean_name}`\n"
-              f"⏰ *Candle Date & Time:* `{curr_date.strftime('%d %b %Y, %H:%M IST')}`\n"
+              f"⏰ *Candle Time:* `{curr_date.strftime('%d %b %Y, %H:%M IST')}`\n"
               f"📈 *Timeframe:* `30 min`\n\n"
               f"🔹 *Entry Price:* `{entry:.2f}`\n"
               f"🛑 *Stop Loss:* `{sl:.2f}`\n"
-              f"🎯 *Target 1 (1:1):* `{t1:.2f}`\n"
-              f"🎯 *Target 2 (1:2):* `{t2:.2f}`\n\n"
+              f"🎯 *Target 1:* `{t1:.2f}`\n"
+              f"🎯 *Target 2:* `{t2:.2f}`\n\n"
               f"🔗 [Open Chart on TradingView]({tv_link})"
           )
           send_telegram_message(msg)
 
-        # Step 2: Confirmation Candle (Breakout Below Mother Low)
+        # Breakout Down (BUY PE)
         elif row["Close"] < m_low and row["Close"] < row["Open"]:
           entry = row["Close"]
           sl = m_mid
           risk = sl - entry
+          if risk <= 0:
+            continue
           t1 = entry - (risk * 1.0)
           t2 = entry - (risk * 2.0)
 
           msg = (
               f"🔻 *BUY PE SIGNAL* 🔻\n\n"
               f"📊 *Symbol:* `{clean_name}`\n"
-              f"⏰ *Candle Date & Time:* `{curr_date.strftime('%d %b %Y, %H:%M IST')}`\n"
+              f"⏰ *Candle Time:* `{curr_date.strftime('%d %b %Y, %H:%M IST')}`\n"
               f"📈 *Timeframe:* `30 min`\n\n"
               f"🔹 *Entry Price:* `{entry:.2f}`\n"
               f"🛑 *Stop Loss:* `{sl:.2f}`\n"
-              f"🎯 *Target 1 (1:1):* `{t1:.2f}`\n"
-              f"🎯 *Target 2 (1:2):* `{t2:.2f}`\n\n"
+              f"🎯 *Target 1:* `{t1:.2f}`\n"
+              f"🎯 *Target 2:* `{t2:.2f}`\n\n"
               f"🔗 [Open Chart on TradingView]({tv_link})"
           )
           send_telegram_message(msg)
