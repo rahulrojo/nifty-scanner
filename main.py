@@ -50,9 +50,9 @@ RR2 = 2.0
 MAX_RISK_ATR = 2.0
 TIME_STOP = 6
 
-# Pine me pending confirmation kabhi expire nahi hota (0 = bilkul Pine jaisa).
-# Agar chahiye ki breakout ke sirf agle N candles me hi confirm ho, to N likho (e.g. 1).
-PENDING_MAX_BARS = 0
+# Confirmation sirf breakout ke agle N candles me valid (1 = "first next candle" rule).
+# 0 = Pine script jaisa (pending kabhi expire nahi hota, din-dino baad bhi confirm ho sakta hai).
+PENDING_MAX_BARS = 1
 
 STATE_FILE = "sent_signals.json"
 IST = "Asia/Kolkata"
@@ -146,6 +146,7 @@ def scan_symbol(df, name=""):
     pendCE = pendPE = False
     pendCEHigh = pendPELow = np.nan
     pendCEBar = pendPEBar = -1
+    pendCEInfo = pendPEInfo = None
     out = []
 
     for i in range(n):
@@ -219,9 +220,11 @@ def scan_symbol(df, name=""):
 
         if breakoutUp:
             pendCE, pendCEHigh, pendCEBar = True, h[i], i
+            pendCEInfo = (times[mBar], mHigh, mLow, times[i])
             EVENTS.append(("breakout", name, times[i]))
         if breakoutDn:
             pendPE, pendPELow, pendPEBar = True, l[i], i
+            pendPEInfo = (times[mBar], mHigh, mLow, times[i])
             EVENTS.append(("breakout", name, times[i]))
 
         if PENDING_MAX_BARS and pendCE and i - pendCEBar > PENDING_MAX_BARS:
@@ -239,6 +242,7 @@ def scan_symbol(df, name=""):
         ceSig = bool(confirmCE and riskOkCE)
         peSig = bool(confirmPE and riskOkPE)
 
+        info_ce, info_pe = pendCEInfo, pendPEInfo
         if ceSig:
             pendCE = False
         if peSig:
@@ -257,6 +261,7 @@ def scan_symbol(df, name=""):
                 "entry": float(entry), "sl": float(sl),
                 "t1": float(t1), "t2": float(t2),
                 "score": score,
+                "mother": info_ce if isCE else info_pe,
             })
 
         # --- breakout ke baad mother ka kaam khatam ---
@@ -308,6 +313,7 @@ def build_msg(name, tv_sym, s):
     q_txt = f"{q10:.1f}".rstrip("0").rstrip(".")
     link = f"https://in.tradingview.com/chart/?symbol={quote(tv_sym, safe='')}&interval=30"
     emoji = "🟢🚀" if s["side"] == "BUY CE" else "🔴💥"
+    m_t, m_h, m_l, b_t = s["mother"]
     return (
         f"{emoji} <b>{s['side']}</b> | <b>{name}</b>\n"
         f"📅 {t.strftime('%d %b %Y')} | 🕒 {t.strftime('%H:%M')} - {end.strftime('%H:%M')} (30m candle)\n"
@@ -317,6 +323,8 @@ def build_msg(name, tv_sym, s):
         f"🎯 Target 1: <b>{fmt(s['t1'])}</b>\n"
         f"🎯 Target 2: <b>{fmt(s['t2'])}</b>\n"
         f"⏱ Time stop: {TIME_STOP} bars\n"
+        f"🕯 Mother: {m_t.strftime('%d %b %H:%M')} (H {fmt(m_h)} / L {fmt(m_l)})\n"
+        f"🕯 Breakout candle: {b_t.strftime('%d %b %H:%M')}\n"
         f"📈 <a href=\"{link}\">TradingView chart</a>"
     )
 
