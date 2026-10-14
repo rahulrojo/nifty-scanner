@@ -242,6 +242,19 @@ def scan_symbol(df, name=""):
         ceSig = bool(confirmCE and riskOkCE)
         peSig = bool(confirmPE and riskOkPE)
 
+        # debug funnel: breakout ke bilkul agle candle par kaunsi shart fail hui
+        for pend, bar, bk, side in ((pendCE, pendCEBar, pendCEHigh, 1), (pendPE, pendPEBar, pendPELow, -1)):
+            if pend and i - bar == 1:
+                EVENTS.append(("next", name, times[i]))
+                green = (c[i] > o[i]) if side == 1 else (c[i] < o[i])
+                beyond = (l[i] > bk) if side == 1 else (h[i] < bk)
+                risk_ok = riskOkCE if side == 1 else riskOkPE
+                if green:
+                    EVENTS.append(("color", name, times[i]))
+                if green and beyond:
+                    EVENTS.append(("beyond", name, times[i]))
+                if green and beyond and risk_ok:
+                    EVENTS.append(("risk", name, times[i]))
         info_ce, info_pe = pendCEInfo, pendPEInfo
         if ceSig:
             pendCE = False
@@ -424,9 +437,13 @@ def main():
 
     mothers = sum(1 for k, _, t in EVENTS if k == "mother" and t.strftime("%Y-%m-%d") in scan_dates)
     brks = sum(1 for k, _, t in EVENTS if k == "breakout" and t.strftime("%Y-%m-%d") in scan_dates)
+    def cnt(kind):
+        return sum(1 for k, _, t in EVENTS if k == kind and t.strftime("%Y-%m-%d") in scan_dates)
+    funnel = (f"agla candle {cnt('next')} -> same colour {cnt('color')} -> poora bahar (no touch) {cnt('beyond')} "
+              f"-> risk OK {cnt('risk')}")
     summary = (f"Scan {', '.join(sorted(scan_dates))}: data {len(data)}/{len(universe)} symbols, "
                f"last candle {last_bar.strftime('%d %b %H:%M') if last_bar is not None else 'NA'}, "
-               f"mother {mothers}, breakout {brks}, BUY signals {len(new_alerts)}")
+               f"mother {mothers}, breakout {brks}, BUY signals {len(new_alerts)}\nFunnel: {funnel}")
     print(summary)
     if os.environ.get("DEBUG_SUMMARY") == "1" or raw_dates:
         send_telegram("🔎 " + summary)
