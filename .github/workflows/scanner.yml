@@ -4,15 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       send_test_message:
-        description: "Telegram test message bhejna hai?"
+        description: "Telegram test message"
         required: true
         type: boolean
         default: true
 
   schedule:
-    # India market hours, UTC.
-    # Offset avoids running exactly at the hour.
-    - cron: "7,37 3-10 * * 1-5"
+    # 30-minute schedule, UTC.
+    # 09:45, 10:15, 10:45 ... IST
+    - cron: "15,45 3-10 * * 1-5"
 
 permissions:
   contents: write
