@@ -9,9 +9,11 @@ import yfinance as yf
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Top FnO Stocks & Major Indices List
+# Top FnO Stocks & Major Indices List (All Included)
 FNO_SYMBOLS = [
+    # Indices
     "^NSEI", "^NSEBANK", "^CNXIT",
+    # Top Liquid FnO Stocks
     "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
     "ITC.NS", "SBIN.NS", "BHARTIARTL.NS", "KOTAKBANK.NS", "LT.NS",
     "AXISBANK.NS", "HINDUNILVR.NS", "BAJFINANCE.NS", "MARUTI.NS", "SUNPHARMA.NS",
@@ -45,14 +47,16 @@ def send_telegram_message(message):
     }
     try:
         response = requests.post(url, json=payload, timeout=10)
-        print(f"Telegram Response: {response.text}")
+        print(f"Telegram Response for message: {response.status_code}")
     except Exception as e:
         print(f"Telegram Error: {e}")
 
 def scan_symbol(symbol):
     try:
+        print(f"Scanning -> {symbol}")
         df = yf.download(symbol, period="2d", interval="15m", progress=False)
         if df.empty or len(df) < 25:
+            print(f"Skipped {symbol} (Not enough data)")
             return
 
         if isinstance(df.columns, pd.MultiIndex):
@@ -82,7 +86,7 @@ def scan_symbol(symbol):
             signal = "📉 BUY PE (Support Breakdown)"
             level_val = support
         else:
-            return
+            return # No breakout on this stock
 
         clean_symbol = symbol.replace(".NS", "").replace("^", "")
         tv_url = f"https://in.tradingview.com/chart/?symbol=NSE:{clean_symbol}"
@@ -91,7 +95,7 @@ def scan_symbol(symbol):
         time_str = c_time_ist.strftime("%I:%M %p")
 
         alert_text = (
-            f"⚡ <b>15-MIN MOMENTUM SIGNAL (TEST)</b>\n\n"
+            f"⚡ <b>15-MIN MOMENTUM SIGNAL</b>\n\n"
             f"📌 <b>Symbol:</b> {clean_symbol}\n"
             f"🎯 <b>Signal:</b> {signal}\n"
             f"💰 <b>Price:</b> ₹{close_price:.2f}\n"
@@ -101,22 +105,19 @@ def scan_symbol(symbol):
         )
         
         send_telegram_message(alert_text)
-        print(f"Alert sent for {clean_symbol}")
+        print(f"--> SIGNAL FOUND & SENT FOR: {clean_symbol}")
 
     except Exception as e:
         print(f"Error scanning {symbol}: {e}")
 
 def main():
-    print("Force scanning stocks for testing...")
-    
-    # Send a startup test message to confirm Telegram is connected
-    send_telegram_message("🤖 <b>Scanner Bot Started Successfully!</b> Checking latest closed candles...")
+    print(f"Starting full scan across {len(FNO_SYMBOLS)} symbols...")
+    send_telegram_message("🤖 <b>Scanner Bot Started!</b> Checking all FnO stocks and indices for breakouts...")
 
-    # Scan a few top stocks or all
-    for symbol in FNO_SYMBOLS[:10]: # Testing with top 10 first to save time
+    for symbol in FNO_SYMBOLS:
         scan_symbol(symbol)
         
-    print("Scan completed.")
+    print("Full scan completed successfully.")
 
 if __name__ == "__main__":
     main()
