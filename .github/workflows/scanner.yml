@@ -1,63 +1,51 @@
-name: Mother Candle 30m Scanner
+name: Mother Candle Scanner
 
 on:
   schedule:
-    # 30m candle close ke baad (IST = UTC + 5:30)
-    # 9:47 AM se 3:17 PM IST tak, har 30 min
-    - cron: '17,47 4-9 * * 1-5'
-    # 3:32 PM IST (last candle close)
-    - cron: '2 10 * * 1-5'
+    # 30m candle close ke baad (IST 09:47 se 15:47), Mon-Fri.  UTC = IST - 5:30
+    - cron: "17,47 4-9 * * 1-5"
+    - cron: "17 10 * * 1-5"
   workflow_dispatch:
     inputs:
-      check_symbol:
-        description: 'Sirf check karna ho to stock (jaise SIEMENS). Khali = normal scan'
+      scan_date:
+        description: "Kisi purane din ke signals chahiye? YYYY-MM-DD (khali = aaj)"
         required: false
-        default: ''
-      check_date:
-        description: 'Check date YYYY-MM-DD (jaise 2026-10-06)'
-        required: false
-        default: ''
+        default: ""
 
 permissions:
   contents: write
 
 concurrency:
-  group: scanner
+  group: mother-candle-scanner
   cancel-in-progress: false
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Install packages
+      - name: Install
         run: pip install yfinance pandas numpy requests
 
-      - name: Run Mother Candle scan
+      - name: Run scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TOP_N: '100'               # sabse volatile kitne F&O stocks (indices alag se hamesha)
-          SEND_TEST: 'true'          # test + scan summary msg; baad me 'false' kar dena
-          ALERT_DAYS: '1'            # 1 = aaj ke signals, 5 = pichle 5 din ke bhi bhejo
-          FULLY_OUTSIDE: 'false'     # true = candle mother ke high/low ko touch kiye bina bahar band ho
-          KEEP_ALIVE: 'true'         # false = pehli breakout candle hi faisla kare
-          MAX_BARS: '8'              # mother kitni candles tak valid
-          TIME_STOP_BARS: '6'        # message me time stop kitni candles ka
-          CHECK_SYMBOL: ${{ github.event.inputs.check_symbol }}
-          CHECK_DATE: ${{ github.event.inputs.check_date }}
+          SCAN_DATE: ${{ github.event.inputs.scan_date }}
         run: python main.py
 
-      - name: Save sent signals (duplicate alert rokne ke liye)
+      - name: Save sent-state
         run: |
           git config user.name "scanner-bot"
           git config user.email "scanner-bot@users.noreply.github.com"
-          git add sent_mother.json || true
-          git diff --cached --quiet || (git commit -m "update sent signals" && git pull --rebase && git push)
+          git add sent_signals.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "update sent signals"
+            git pull --rebase
+            git push
+          fi
