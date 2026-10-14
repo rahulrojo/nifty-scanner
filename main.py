@@ -44,7 +44,8 @@ def send_telegram_message(message):
         "disable_web_page_preview": False
     }
     try:
-        requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=10)
+        print(f"Telegram Response: {response.text}")
     except Exception as e:
         print(f"Telegram Error: {e}")
 
@@ -62,10 +63,6 @@ def scan_symbol(symbol):
             candle_time = pytz.utc.localize(candle_time)
         ist = pytz.timezone('Asia/Kolkata')
         c_time_ist = candle_time.astimezone(ist)
-
-        # Skip Day's First Candle (9:15 AM - 9:30 AM)
-        if c_time_ist.hour == 9 and c_time_ist.minute < 30:
-            return
 
         lookback = 20
         recent_df = df.iloc[-26:-2]
@@ -94,7 +91,7 @@ def scan_symbol(symbol):
         time_str = c_time_ist.strftime("%I:%M %p")
 
         alert_text = (
-            f"⚡ <b>15-MIN MOMENTUM SIGNAL</b>\n\n"
+            f"⚡ <b>15-MIN MOMENTUM SIGNAL (TEST)</b>\n\n"
             f"📌 <b>Symbol:</b> {clean_symbol}\n"
             f"🎯 <b>Signal:</b> {signal}\n"
             f"💰 <b>Price:</b> ₹{close_price:.2f}\n"
@@ -104,30 +101,22 @@ def scan_symbol(symbol):
         )
         
         send_telegram_message(alert_text)
-        print(f"Alert sent for {clean_symbol} at {time_str}")
+        print(f"Alert sent for {clean_symbol}")
 
     except Exception as e:
         print(f"Error scanning {symbol}: {e}")
 
 def main():
-    ist = pytz.timezone('Asia/Kolkata')
-    now = datetime.now(ist)
+    print("Force scanning stocks for testing...")
     
-    # Check Market Hours (Mon-Fri, 9:15 AM to 3:30 PM IST)
-    if now.weekday() >= 5:
-        print("Market is closed (Weekend).")
-        return
+    # Send a startup test message to confirm Telegram is connected
+    send_telegram_message("🤖 <b>Scanner Bot Started Successfully!</b> Checking latest closed candles...")
 
-    market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
-    
-    if not (market_open <= now <= market_close):
-        print("Market is closed (Outside trading hours).")
-        return
-
-    print(f"Scanning {len(FNO_SYMBOLS)} FnO stocks & indices...")
-    for symbol in FNO_SYMBOLS:
+    # Scan a few top stocks or all
+    for symbol in FNO_SYMBOLS[:10]: # Testing with top 10 first to save time
         scan_symbol(symbol)
+        
+    print("Scan completed.")
 
 if __name__ == "__main__":
     main()
