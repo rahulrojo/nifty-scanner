@@ -1,12 +1,18 @@
-name: Romyo 30 Minute CE PE Scanner
+name: Romyo 30m Scanner
 
 on:
   workflow_dispatch:
+    inputs:
+      send_test_message:
+        description: "Telegram test message bhejna hai?"
+        required: true
+        type: boolean
+        default: true
 
   schedule:
-    # Runs every 30 minutes during the Indian market session.
-    # GitHub Actions uses UTC.
-    - cron: "0,30 3-10 * * 1-5"
+    # India market hours, UTC.
+    # Offset avoids running exactly at the hour.
+    - cron: "7,37 3-10 * * 1-5"
 
 permissions:
   contents: write
@@ -24,34 +30,33 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
 
-      - name: Install dependencies
+      - name: Install libraries
         run: |
           python -m pip install --upgrade pip
           pip install yfinance pandas numpy requests
 
-      - name: Run Romyo scanner
+      - name: Run scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_TEST_MESSAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.send_test_message || false }}
           TZ: Asia/Kolkata
-        run: |
-          python main.py
+        run: python main.py
 
-      - name: Save duplicate protection state
+      - name: Save signal state
         if: always()
         run: |
           if [ -f signal_state.json ]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add signal_state.json
-            git diff --cached --quiet || (
-              git commit -m "Update Romyo signal state" &&
+            if ! git diff --cached --quiet; then
+              git commit -m "Update Romyo signal state"
               git push
-            )
+            fi
           fi
