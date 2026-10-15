@@ -44,7 +44,7 @@ jobs:
           SCAN_DATE: ${{ github.event.inputs.scan_date }}
           TEST_MESSAGE: ${{ github.event.inputs.test_message }}
           DEBUG_SUMMARY: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
-        run: python main_br.py
+        run: python main.py
 
       - name: Save sent-state
         run: |
