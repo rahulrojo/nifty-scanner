@@ -193,7 +193,8 @@ def fetch_all(universe):
                             df = clean(raw[u["y"]])
                     else:
                         df = clean(raw)
-            except Exception:
+            except Exception as e:
+                print(f"parse error {u['name']}: {e}")
                 df = None
             if df is None:  # single-ticker fallback
                 try:
@@ -400,8 +401,10 @@ def main():
     print(f"Now (IST): {now:%Y-%m-%d %H:%M} | symbols: {len(universe)}")
 
     data = fetch_all(universe)
+    print(f"Fetched data for {len(data)}/{len(universe)} symbols")
     if not data:
         print("No data fetched at all — exiting without touching state.")
+        send_telegram("⚠️ <b>ROMYO scanner</b>: Yahoo se data nahi mila (rate-limit/blocked ho sakta hai). Agli run mein dobara try hoga.")
         sys.exit(1)
 
     all_signals = []  # (universe item, signal)
@@ -419,6 +422,13 @@ def main():
 
     all_signals.sort(key=lambda x: (x[1]["time"], x[0]["name"]))
 
+    if all_dates:
+        print(f"Latest closed candle date in data: {max(all_dates)} | trading days loaded: {len(all_dates)}")
+    by_day = {}
+    for _, s_ in all_signals:
+        by_day[s_["time"].date()] = by_day.get(s_["time"].date(), 0) + 1
+    print("Signals found per day (last 5):", dict(sorted(by_day.items())[-5:]))
+
     if DEBUG:
         d3 = sorted(all_dates)[-3:]
         print("---- DEBUG: signals of last 3 trading days ----")
@@ -434,6 +444,7 @@ def main():
         prev_days = [d for d in all_dates if d < today]
         if not prev_days:
             print("No previous trading day found in data — exiting.")
+            send_telegram("⚠️ <b>ROMYO scanner</b>: pichle working day ka data nahi mila.")
             sys.exit(1)
         prev_day = max(prev_days)
         # every signal that exists right now is marked as seen; only prev day's are sent
@@ -449,6 +460,8 @@ def main():
         mark_after_send = True
 
     print(f"Signals to send: {len(to_send)} (first_run={first_run})")
+    if not first_run and not to_send:
+        print("Not first run -> only NEW signals of TODAY are sent; none found. (State reset ke bina pichle din ke signals nahi aate.)")
 
     ok_count = 0
     for u, s in to_send:
