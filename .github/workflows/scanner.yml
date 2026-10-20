@@ -1,58 +1,60 @@
-name: Breaks and Retests Scanner 30m
+name: ROMYO 30 Minute Scanner
 
 on:
-  schedule:
-    # 30m candle close ke baad (IST 09:47 se 15:47), Mon-Fri.  UTC = IST - 5:30
-    - cron: "17,47 4-9 * * 1-5"
-    - cron: "17 10 * * 1-5"
   workflow_dispatch:
-    inputs:
-      scan_date:
-        description: "Dates YYYY-MM-DD (comma se kai: 2026-10-13,2026-10-14). Khali = aaj"
-        required: false
-        default: ""
-      test_message:
-        description: "Telegram test message bhejo? (1 = haan)"
-        required: false
-        default: ""
+
+  schedule:
+    # Runs every 30 minutes during the approximate NSE session.
+    # GitHub uses UTC; 04:20 UTC = 09:50 IST.
+    - cron: "20,50 4-10 * * 1-5"
 
 permissions:
   contents: write
 
 concurrency:
-  group: breaks-retests-scanner-30m
+  group: romyo-market-scanner
   cancel-in-progress: false
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    timeout-minutes: 30
 
-      - uses: actions/setup-python@v5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
-      - name: Install
-        run: pip install yfinance pandas numpy requests
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas requests
 
-      - name: Run scanner
+      - name: Run ROMYO scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TF: "30"
-          SCAN_DATE: ${{ github.event.inputs.scan_date }}
-          TEST_MESSAGE: ${{ github.event.inputs.test_message }}
-          DEBUG_SUMMARY: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
-        run: python main.py
-
-      - name: Save sent-state
+          TZ: Asia/Kolkata
         run: |
-          git config user.name "scanner-bot"
-          git config user.email "scanner-bot@users.noreply.github.com"
-          git add sent_br_30m.json || true
-          if ! git diff --cached --quiet; then
-            git commit -m "update sent signals (breaks-retests 30m)"
-            git pull --rebase
-            git push
+          python main.py
+
+      - name: Save signal state
+        if: always()
+        run: |
+          if [ -f signal_state.json ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add signal_state.json
+
+            if ! git diff --cached --quiet; then
+              git commit -m "Update ROMYO scanner state"
+              git push
+            fi
           fi
