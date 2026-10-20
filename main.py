@@ -46,7 +46,8 @@ USE_EMA = True
 MAX_WAIT = 8
 
 # ===================== BOT SETTINGS =====================
-INTERVAL = "30m"
+INTERVAL = "30m"          # chart timeframe (built by us from 5m, anchored at 9:15 like TradingView)
+FETCH_INTERVAL = "5m"
 PERIOD = "45d"                    # yfinance limit for 30m is 60 days
 TARGET_RRS = (1.0, 1.5, 2.0)      # targets as multiple of risk (entry - SL)
 STATE_FILE = "romyo_state.json"
@@ -144,7 +145,18 @@ def clean(df):
     df.index = df.index.tz_convert(IST)
     df = df[~df.index.duplicated(keep="last")].sort_index()
     df["Volume"] = df["Volume"].fillna(0)
-    return df
+    return to_30m(df)
+
+
+def to_30m(df):
+    """Resample 5m -> 30m bars at 09:15, 09:45 ... 15:15 (same grid as TradingView NSE)."""
+    df = df.between_time("09:15", "15:29")
+    if df.empty:
+        return None
+    agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+    out = df.resample("30min", origin="start_day", offset="9h15min", label="left", closed="left").agg(agg)
+    out = out.dropna(subset=["Open", "High", "Low", "Close"])
+    return out if not out.empty else None
 
 
 def drop_open_candle(df, now):
@@ -166,7 +178,7 @@ def fetch_all(universe):
         raw = None
         for attempt in range(3):
             try:
-                raw = yf.download(tickers, period=PERIOD, interval=INTERVAL, group_by="ticker",
+                raw = yf.download(tickers, period=PERIOD, interval=FETCH_INTERVAL, group_by="ticker",
                                   auto_adjust=False, threads=True, progress=False)
                 break
             except Exception as e:  # noqa
@@ -185,7 +197,7 @@ def fetch_all(universe):
                 df = None
             if df is None:  # single-ticker fallback
                 try:
-                    df = clean(yf.Ticker(u["y"]).history(period=PERIOD, interval=INTERVAL, auto_adjust=False))
+                    df = clean(yf.Ticker(u["y"]).history(period=PERIOD, interval=FETCH_INTERVAL, auto_adjust=False))
                 except Exception:
                     df = None
             if df is None or len(df) < ATR_LEN + 5:
@@ -221,6 +233,7 @@ def scan_symbol(df, index_symbol):
     breakout_level = np.nan
     breakout_sl = np.nan
     bo_mother = None
+    bo_vr = None
 
     signals = []
 
@@ -256,6 +269,7 @@ def scan_symbol(df, index_symbol):
             breakout_level = mother_high
             breakout_sl = mother_low
             bo_mother = (mother_bar, mother_high, mother_low)
+            bo_vr = (v[i] / vol_ma[i]) if (not np.isnan(vol_ma[i]) and vol_ma[i] > 0) else None
 
         if break_down and vol_ok and bear_ok:
             waiting_breakout = False
@@ -265,6 +279,7 @@ def scan_symbol(df, index_symbol):
             breakout_level = mother_low
             breakout_sl = mother_high
             bo_mother = (mother_bar, mother_high, mother_low)
+            bo_vr = (v[i] / vol_ma[i]) if (not np.isnan(vol_ma[i]) and vol_ma[i] > 0) else None
 
         buy_ce = buy_pe = False
         if waiting_conf and i == breakout_bar + 1:
@@ -275,7 +290,7 @@ def scan_symbol(df, index_symbol):
             waiting_conf = False
 
         if buy_ce or buy_pe:
-            vr = (v[i] / vol_ma[i]) if (not np.isnan(vol_ma[i]) and vol_ma[i] > 0) else None
+            vr = bo_vr
             signals.append({
                 "side": "CE" if buy_ce else "PE",
                 "time": times[i],
@@ -325,7 +340,7 @@ def build_message(u, s):
         f"⚡ Breakout candle: {fmt_t(s['bo_time'], s['time'])} (close {fmt_price(s['bo_close'])})",
     ]
     if s["vol_ratio"] is not None:
-        lines.append(f"📊 Volume: {s['vol_ratio']:.1f}x of {VOL_LEN}-bar avg")
+        lines.append(f"📊 Breakout candle volume: {s['vol_ratio']:.1f}x of {VOL_LEN}-bar avg")
     lines.append(f"📈 <a href=\"{link}\">TradingView chart</a>")
     lines.append("<i>Target/SL underlying price ke hain, option premium ke nahi.</i>")
     return "\n".join(lines)
@@ -426,8 +441,7 @@ def main():
             sent.add(sig_key(u, s))
         to_send = [(u, s) for u, s in all_signals if s["time"].date() == prev_day]
         header = f"📌 <b>ROMYO Confirmed MC Breakout</b>\nPichle working day ({prev_day:%d %b %Y}) ke signals: <b>{len(to_send)}</b>"
-        if send_telegram(header) or not TOKEN:
-            pass
+        send_telegram(header)
         mark_after_send = False
     else:
         to_send = [(u, s) for u, s in all_signals
@@ -440,12 +454,15 @@ def main():
     for u, s in to_send:
         if send_telegram(build_message(u, s)):
             ok_count += 1
-            if mark_after_send:
+            if mark_after_send and TOKEN and CHAT_ID:
                 sent.add(sig_key(u, s))
                 state["sent"] = list(sent)
                 state["initialized"] = True
                 save_state(state, today)
 
+    if not (TOKEN and CHAT_ID):
+        print("Dry run (Telegram secrets missing) — state NOT saved.")
+        return
     state["initialized"] = True
     state["sent"] = list(sent)
     state["last_run"] = now.isoformat()
