@@ -1,60 +1,59 @@
-name: ROMYO 30 Minute Scanner
+name: ROMYO Confirmed MC Scanner
 
 on:
-  workflow_dispatch:
-
   schedule:
-    # Runs every 30 minutes during the approximate NSE session.
-    # GitHub uses UTC; 04:20 UTC = 09:50 IST.
-    - cron: "20,50 4-10 * * 1-5"
+    # Candle close IST: 9:45, 10:15 ... 15:30  (UTC = IST - 5:30)
+    # Runs 2 min after each candle close, Mon-Fri
+    - cron: "17,47 4-9 * * 1-5"   # 09:47 IST -> 15:17 IST
+    - cron: "17 10 * * 1-5"       # 15:47 IST (last 15:15 candle)
+  workflow_dispatch:
+    inputs:
+      reset_state:
+        description: "true = state delete karke fresh first run (pichle working day ke signals dobara)"
+        required: false
+        default: "false"
 
 permissions:
   contents: write
 
 concurrency:
-  group: romyo-market-scanner
+  group: romyo-scanner
   cancel-in-progress: false
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 15
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref_name }}
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install yfinance pandas requests
+        run: pip install yfinance pandas numpy requests
 
-      - name: Run ROMYO scanner
+      - name: Reset state (manual only)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.reset_state == 'true' }}
+        run: rm -f romyo_state.json
+
+      - name: Run scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TZ: Asia/Kolkata
-        run: |
-          python main.py
+        run: python main.py
 
-      - name: Save signal state
+      - name: Save state
         if: always()
         run: |
-          if [ -f signal_state.json ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add signal_state.json
-
-            if ! git diff --cached --quiet; then
-              git commit -m "Update ROMYO scanner state"
-              git push
-            fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add romyo_state.json || true
+          if git diff --cached --quiet; then
+            echo "No state change"
+          else
+            git commit -m "update scanner state [skip ci]"
+            git pull --rebase origin ${{ github.ref_name }} || true
+            git push
           fi
