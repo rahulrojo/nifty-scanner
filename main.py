@@ -10,7 +10,7 @@ Pine logic (exact port):
   Stop loss = opposite side of the mother candle.
 
 Run behaviour:
-  * First run (no state file)  -> sends signals of the PREVIOUS WORKING DAY only
+  * First run (no state file)  -> sends TODAY's signals so far, once
   * Next runs                  -> sends only NEW signals of today (live)
 
 ENV:
@@ -50,7 +50,7 @@ INTERVAL = "30m"          # chart timeframe (built by us from 5m, anchored at 9:
 FETCH_INTERVAL = "5m"
 PERIOD = "45d"                    # yfinance limit for 30m is 60 days
 TARGET_RRS = (1.0, 1.5, 2.0)      # targets as multiple of risk (entry - SL)
-STATE_FILE = "romyo_state_v2.json"
+STATE_FILE = "romyo_state_v3.json"
 BATCH = 25
 IST = ZoneInfo("Asia/Kolkata")
 CANDLE_MIN = 30
@@ -441,17 +441,13 @@ def main():
     sent = set(state.get("sent", []))
 
     if first_run:
-        prev_days = [d for d in all_dates if d < today]
-        if not prev_days:
-            print("No previous trading day found in data — exiting.")
-            send_telegram("⚠️ <b>ROMYO scanner</b>: pichle working day ka data nahi mila.")
-            sys.exit(1)
-        prev_day = max(prev_days)
-        # every signal that exists right now is marked as seen; only prev day's are sent
+        # every signal that exists right now is marked as seen; only TODAY's are sent (once)
         for u, s in all_signals:
             sent.add(sig_key(u, s))
-        to_send = [(u, s) for u, s in all_signals if s["time"].date() == prev_day]
-        header = f"📌 <b>ROMYO Confirmed MC Breakout</b>\nPichle working day ({prev_day:%d %b %Y}) ke signals: <b>{len(to_send)}</b>"
+        to_send = [(u, s) for u, s in all_signals if s["time"].date() == today]
+        header = (f"📌 <b>ROMYO Confirmed MC Breakout</b>\n"
+                  f"Aaj ({today:%d %b %Y}) ke ab tak ke signals: <b>{len(to_send)}</b>\n"
+                  f"Iske baad sirf live signals aayenge.")
         send_telegram(header)
         mark_after_send = False
     else:
