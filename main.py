@@ -1,4 +1,3 @@
-
 """
 ROMYO Confirmed Mother Candle Breakout  ->  Python port (30 min) + Telegram alerts
 
@@ -51,7 +50,7 @@ INTERVAL = "30m"          # chart timeframe (built by us from 5m, anchored at 9:
 FETCH_INTERVAL = "5m"
 PERIOD = "45d"                    # yfinance limit for 30m is 60 days
 TARGET_RRS = (1.0, 1.5, 2.0)      # targets as multiple of risk (entry - SL)
-STATE_FILE = "romyo_state.json"
+STATE_FILE = "romyo_state_v2.json"
 BATCH = 25
 IST = ZoneInfo("Asia/Kolkata")
 CANDLE_MIN = 30
