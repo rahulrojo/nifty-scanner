@@ -1,3 +1,4 @@
+
 """
 ROMYO Confirmed Mother Candle Breakout  ->  Python port (30 min) + Telegram alerts
 
@@ -74,7 +75,7 @@ INDICES = [
 STOCKS = [
     "RELIANCE", "HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK", "KOTAKBANK", "INDUSINDBK",
     "BANKBARODA", "PNB", "CANBK", "FEDERALBNK", "IDFCFIRSTB", "BANDHANBNK", "AUBANK",
-    "YESBANK", "UNIONBANK", "INFY", "TCS", "WIPRO", "HCLTECH", "TECHM", "LTIM",
+    "YESBANK", "UNIONBANK", "INFY", "TCS", "WIPRO", "HCLTECH", "TECHM", "PIIND",
     "COFORGE", "PERSISTENT", "MPHASIS", "BAJFINANCE", "BAJAJFINSV", "CHOLAFIN",
     "SHRIRAMFIN", "MUTHOOTFIN", "MANAPPURAM", "LICHSGFIN", "PFC", "RECLTD", "SBILIFE",
     "HDFCLIFE", "ICICIPRULI", "ICICIGI", "SBICARD", "JIOFIN", "TATASTEEL", "JSWSTEEL",
@@ -179,7 +180,7 @@ def fetch_all(universe):
         for attempt in range(3):
             try:
                 raw = yf.download(tickers, period=PERIOD, interval=FETCH_INTERVAL, group_by="ticker",
-                                  auto_adjust=False, threads=True, progress=False)
+                                  auto_adjust=False, threads=False, progress=False)
                 break
             except Exception as e:  # noqa
                 print(f"batch download error ({attempt + 1}/3): {e}")
