@@ -1,23 +1,24 @@
-name: ROMYO Confirmed MC Scanner
+name: CPR Pivot Touch Scanner
 
 on:
   schedule:
     # Candle close IST: 9:45, 10:15 ... 15:30  (UTC = IST - 5:30)
-    # Runs 2 min after each candle close, Mon-Fri
-    - cron: "17,47 4-9 * * 1-5"   # 09:47 IST -> 15:17 IST
-    - cron: "17 10 * * 1-5"       # 15:47 IST (last 15:15 candle)
+    # Runs ~5 min after each candle close, Mon-Fri
+    - cron: "20,50 4-9 * * 1-5"   # 09:50 IST -> 15:20 IST
+    - cron: "20 10 * * 1-5"       # 15:50 IST (last 15:15 candle)
   workflow_dispatch:
     inputs:
       reset_state:
-        description: "true = state delete karke fresh first run (pichle working day ke signals dobara)"
+        description: "ON karo = state delete karke fresh first run (aaj ke ab tak ke signals dobara)"
+        type: boolean
         required: false
-        default: "false"
+        default: false
 
 permissions:
   contents: write
 
 concurrency:
-  group: romyo-scanner
+  group: cpr-scanner
   cancel-in-progress: false
 
 jobs:
@@ -35,25 +36,26 @@ jobs:
         run: pip install yfinance pandas numpy requests
 
       - name: Reset state (manual only)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.reset_state == 'true' }}
-        run: rm -f romyo_state.json
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.reset_state }}
+        run: rm -f cpr_state*.json
 
       - name: Run scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python main.py
+          MIN_QUALITY: "0"
+        run: python cpr_main.py
 
       - name: Save state
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add romyo_state.json || true
+          git add -A -- 'cpr_state*.json' || true
           if git diff --cached --quiet; then
             echo "No state change"
           else
-            git commit -m "update scanner state [skip ci]"
+            git commit -m "update cpr scanner state [skip ci]"
             git pull --rebase origin ${{ github.ref_name }} || true
             git push
           fi
