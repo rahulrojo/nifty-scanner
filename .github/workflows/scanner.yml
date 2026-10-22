@@ -44,7 +44,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           MIN_QUALITY: "0"
-        run: python cpr_main.py
+        run: python main.py
 
       - name: Save state
         if: always()
