@@ -1,28 +1,30 @@
 """
-ROMYO Confirmed Mother Candle Breakout  ->  Python port (30 min) + Telegram alerts
+CPR by VickyBobby  ->  Pivot (P / black line) TOUCH alerts, 30 min, Telegram
 
-Pine logic (exact port):
-  1. Mother candle : range between MIN/MAX ATR, body >= MIN_BODY_PCT, only when no setup is active
-  2. Breakout      : first candle that CLOSES outside mother (close[1] must still be inside),
-                     with volume filter + EMA21 trend filter
-  3. Confirmation  : the NEXT candle must close AND stay (low/high) fully beyond the breakout level
-                     -> only this candle prints BUY CE / BUY PE
-  Stop loss = opposite side of the mother candle.
+Rules
+  * Daily CPR from PREVIOUS trading day H/L/C  (P = (H+L+C)/3, BC = (H+L)/2, TC = 2P-BC)  -- same as Pine
+  * A 30m candle "touches" P when  low <= P <= high
+  * Alert only on the FIRST touch: previous candle (same day) must NOT have touched P
+  * Direction (decided on candle close):  close above P -> BUY CE ,  close below P -> BUY PE
+  * Quality score /10 : close distance from P (ATR), candle body+colour, EMA21/EMA50 trend,
+                        volume, CPR width (narrow = trending day)
 
-Run behaviour:
-  * First run (no state file)  -> sends TODAY's signals so far, once
-  * Next runs                  -> sends only NEW signals of today (live)
+Run behaviour
+  * First run (no state file) -> TODAY's signals so far, once
+  * Next runs                 -> only NEW live signals of today
 
-ENV:
+ENV
   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID   (required)
-  DEBUG=1            -> prints every signal of the last 3 days (no Telegram needed for compare)
-  ONLY=SIEMENS,TCS   -> scan only these symbols (for testing against TradingView)
+  MIN_QUALITY=6      -> send only signals with quality >= 6   (default 0 = send all)
+  DEBUG=1            -> print all touches of last 3 days (to compare with TradingView)
+  ONLY=SBIN,TCS      -> scan only these symbols
 """
 
 import json
 import os
 import sys
 import time
+from bisect import bisect_left
 from datetime import datetime, timedelta
 from html import escape
 from urllib.parse import quote
@@ -33,24 +35,20 @@ import pandas as pd
 import requests
 import yfinance as yf
 
-# ===================== SETTINGS (same as Pine) =====================
-EMA_LEN = 21
+# ===================== SETTINGS =====================
+EMA_FAST = 21
+EMA_SLOW = 50
 ATR_LEN = 14
-MIN_MOTHER_ATR = 1.0
-MAX_MOTHER_ATR = 2.5
-MIN_BODY_PCT = 50.0
-USE_VOLUME = True
 VOL_LEN = 20
-VOL_MULT = 1.0
-USE_EMA = True
-MAX_WAIT = 8
+NARROW_PCT = 0.5          # CPR width % below this = NARROW (trending)  (same as Pine default)
+WIDE_PCT = 1.0            # above this = WIDE (sideways)
+TOUCH_TOL_PCT = 0.0       # extra tolerance around P in % (0 = exact candle-range touch)
+MIN_QUALITY = float(os.getenv("MIN_QUALITY", "0"))
 
-# ===================== BOT SETTINGS =====================
-INTERVAL = "30m"          # chart timeframe (built by us from 5m, anchored at 9:15 like TradingView)
-FETCH_INTERVAL = "5m"
-PERIOD = "45d"                    # yfinance limit for 30m is 60 days
-TARGET_RRS = (1.0, 1.5, 2.0)      # targets as multiple of risk (entry - SL)
-STATE_FILE = "romyo_state_v3.json"
+FETCH_INTERVAL = "5m"     # 30m bars are built from 5m, anchored at 09:15 like TradingView (NSE)
+PERIOD = "45d"
+DAILY_PERIOD = "3mo"
+STATE_FILE = "cpr_state.json"
 BATCH = 25
 IST = ZoneInfo("Asia/Kolkata")
 CANDLE_MIN = 30
@@ -62,7 +60,6 @@ DEBUG = os.getenv("DEBUG", "0") == "1"
 ONLY = {x.strip().upper() for x in os.getenv("ONLY", "").split(",") if x.strip()}
 
 # ===================== SYMBOLS =====================
-# (yahoo symbol, display name, tradingview symbol)
 INDICES = [
     ("^NSEI", "NIFTY 50", "NSE:NIFTY"),
     ("^NSEBANK", "BANK NIFTY", "NSE:BANKNIFTY"),
@@ -133,10 +130,24 @@ def pine_atr(h, l, c, length):
 
 
 # ===================== DATA =====================
-def clean(df):
+def to_30m(df):
+    """5m -> 30m bars at 09:15, 09:45 ... 15:15 (same grid as TradingView NSE)."""
+    df = df.between_time("09:15", "15:29")
+    if df.empty:
+        return None
+    agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+    out = df.resample("30min", origin="start_day", offset="9h15min", label="left", closed="left").agg(agg)
+    out = out.dropna(subset=["Open", "High", "Low", "Close"])
+    return out if not out.empty else None
+
+
+def clean_intraday(df):
     if df is None or df.empty:
         return None
-    df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+    try:
+        df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+    except KeyError:
+        return None
     df = df.dropna(subset=["Open", "High", "Low", "Close"])
     if df.empty:
         return None
@@ -148,163 +159,246 @@ def clean(df):
     return to_30m(df)
 
 
-def to_30m(df):
-    """Resample 5m -> 30m bars at 09:15, 09:45 ... 15:15 (same grid as TradingView NSE)."""
-    df = df.between_time("09:15", "15:29")
+def clean_daily(df):
+    """-> (sorted list of dates, ndarray [H, L, C])"""
+    if df is None or df.empty:
+        return None
+    try:
+        df = df[["High", "Low", "Close"]].dropna()
+    except KeyError:
+        return None
     if df.empty:
         return None
-    agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
-    out = df.resample("30min", origin="start_day", offset="9h15min", label="left", closed="left").agg(agg)
-    out = out.dropna(subset=["Open", "High", "Low", "Close"])
-    return out if not out.empty else None
+    idx = pd.DatetimeIndex(df.index)
+    if idx.tz is not None:
+        idx = idx.tz_convert(IST)
+    rows = {}
+    for d, h, l, c in zip(idx.date, df["High"].to_numpy(float), df["Low"].to_numpy(float), df["Close"].to_numpy(float)):
+        rows[d] = (h, l, c)
+    dates = sorted(rows)
+    return dates, np.array([rows[d] for d in dates])
+
+
+def daily_from_intraday(df):
+    g = df.groupby(df.index.date)
+    dates = sorted(g.groups)
+    arr = np.array([[g.get_group(d)["High"].max(), g.get_group(d)["Low"].min(), g.get_group(d)["Close"].iloc[-1]]
+                    for d in dates])
+    return dates, arr
 
 
 def drop_open_candle(df, now):
-    """Keep only fully closed candles (Pine: barstate.isconfirmed)."""
+    """Keep only fully closed 30m candles."""
     keep = []
     for ts in df.index:
         close_t = ts + timedelta(minutes=CANDLE_MIN)
         sess_end = ts.replace(hour=SESSION_END[0], minute=SESSION_END[1], second=0, microsecond=0)
-        close_t = min(close_t, sess_end)
-        keep.append(close_t <= now)
+        keep.append(min(close_t, sess_end) <= now)
     return df[np.array(keep, dtype=bool)]
 
 
+def download(tickers, period, interval):
+    for attempt in range(3):
+        try:
+            return yf.download(tickers, period=period, interval=interval, group_by="ticker",
+                               auto_adjust=False, threads=False, progress=False)
+        except Exception as e:  # noqa
+            print(f"download error {interval} ({attempt + 1}/3): {e}")
+            time.sleep(3)
+    return None
+
+
+def get_frame(raw, sym):
+    if raw is None or raw.empty:
+        return None
+    if isinstance(raw.columns, pd.MultiIndex):
+        return raw[sym] if sym in raw.columns.get_level_values(0) else None
+    return raw
+
+
 def fetch_all(universe):
-    data = {}
+    intraday, daily = {}, {}
     for i in range(0, len(universe), BATCH):
         chunk = universe[i:i + BATCH]
         tickers = [u["y"] for u in chunk]
-        raw = None
-        for attempt in range(3):
-            try:
-                raw = yf.download(tickers, period=PERIOD, interval=FETCH_INTERVAL, group_by="ticker",
-                                  auto_adjust=False, threads=False, progress=False)
-                break
-            except Exception as e:  # noqa
-                print(f"batch download error ({attempt + 1}/3): {e}")
-                time.sleep(3)
+        raw5 = download(tickers, PERIOD, FETCH_INTERVAL)
+        rawd = download(tickers, DAILY_PERIOD, "1d")
         for u in chunk:
-            df = None
             try:
-                if raw is not None and not raw.empty:
-                    if isinstance(raw.columns, pd.MultiIndex):
-                        if u["y"] in raw.columns.get_level_values(0):
-                            df = clean(raw[u["y"]])
-                    else:
-                        df = clean(raw)
-            except Exception as e:
+                df = clean_intraday(get_frame(raw5, u["y"]))
+            except Exception as e:  # noqa
                 print(f"parse error {u['name']}: {e}")
                 df = None
-            if df is None:  # single-ticker fallback
+            if df is None:
                 try:
-                    df = clean(yf.Ticker(u["y"]).history(period=PERIOD, interval=FETCH_INTERVAL, auto_adjust=False))
+                    df = clean_intraday(yf.Ticker(u["y"]).history(period=PERIOD, interval=FETCH_INTERVAL, auto_adjust=False))
                 except Exception:
                     df = None
-            if df is None or len(df) < ATR_LEN + 5:
+            if df is None or len(df) < EMA_SLOW + 5:
                 print(f"SKIP (no data): {u['name']} [{u['y']}]")
                 continue
-            data[u["y"]] = df
-    return data
+            intraday[u["y"]] = df
+            try:
+                dd = clean_daily(get_frame(rawd, u["y"]))
+            except Exception:
+                dd = None
+            if dd is None:
+                print(f"daily missing for {u['name']} -> using intraday-derived H/L/C")
+                dd = daily_from_intraday(df)
+            daily[u["y"]] = dd
+    return intraday, daily
 
 
-# ===================== STRATEGY (exact Pine port) =====================
-def scan_symbol(df, index_symbol):
+# ===================== CPR / PIVOT (same formulas as Pine) =====================
+def calc_levels(h, l, c):
+    p = (h + l + c) / 3
+    bc = (h + l) / 2
+    tc = (p - bc) + p
+    return {
+        "p": p, "tc": max(tc, bc), "bc": min(tc, bc),
+        "r1": 2 * p - l, "s1": 2 * p - h,
+        "r2": p + (h - l), "s2": p - (h - l),
+        "r3": h + 2 * (p - l), "s3": l - 2 * (h - p),
+        "pdh": h, "pdl": l,
+    }
+
+
+def levels_for_day(day, dates, arr):
+    k = bisect_left(dates, day) - 1          # last daily row strictly BEFORE this day
+    if k < 0:
+        return None
+    h, l, c = arr[k]
+    return calc_levels(h, l, c)
+
+
+# ===================== SCAN =====================
+def quality(side, o, h, l, c, atr, ema_f, ema_s, vr, lv):
+    p = lv["p"]
+    pts, mx, notes = 0, 0, []
+
+    # 1) close distance beyond P (in ATR)
+    mx += 2
+    dist = abs(c - p) / atr if (not np.isnan(atr) and atr > 0) else 0.0
+    pts += 2 if dist >= 0.5 else 1 if dist >= 0.25 else 0
+    notes.append(f"close {dist:.1f} ATR {'upar' if c > p else 'neeche'}")
+
+    # 2) candle body + colour
+    mx += 2
+    rng = h - l
+    bpct = abs(c - o) / rng * 100 if rng > 0 else 0.0
+    color_ok = (c > o) if side == "CE" else (c < o)
+    if color_ok:
+        pts += 2 if bpct >= 60 else 1 if bpct >= 40 else 0
+    notes.append(f"body {bpct:.0f}%" + ("" if color_ok else " (ulta color)"))
+
+    # 3) trend (EMA21 / EMA50)
+    mx += 2
+    if side == "CE":
+        t = int(c > ema_f) + int(ema_f > ema_s)
+    else:
+        t = int(c < ema_f) + int(ema_f < ema_s)
+    pts += t
+    notes.append("trend ✓" if t == 2 else "trend ½" if t == 1 else "trend ✗")
+
+    # 4) volume (skipped for indices / no-volume data -> score is scaled)
+    if vr is not None:
+        mx += 2
+        pts += 2 if vr >= 1.5 else 1 if vr >= 1.0 else 0
+        notes.append(f"vol {vr:.1f}x")
+
+    # 5) CPR width
+    mx += 2
+    width = abs(lv["tc"] - lv["bc"]) / p * 100 if p else 0.0
+    if width < NARROW_PCT:
+        pts += 2
+        wtype = "NARROW"
+    elif width <= WIDE_PCT:
+        pts += 1
+        wtype = "NORMAL"
+    else:
+        wtype = "WIDE"
+    notes.append(f"CPR {wtype} {width:.2f}%")
+
+    return int(round(pts / mx * 10)), notes, width, wtype
+
+
+def pick_targets(side, close, lv):
+    if side == "CE":
+        cands = [("TC", lv["tc"]), ("R1", lv["r1"]), ("R2", lv["r2"]), ("R3", lv["r3"]), ("PDH", lv["pdh"])]
+        cands = sorted([x for x in cands if x[1] > close], key=lambda x: x[1])
+    else:
+        cands = [("BC", lv["bc"]), ("S1", lv["s1"]), ("S2", lv["s2"]), ("S3", lv["s3"]), ("PDL", lv["pdl"])]
+        cands = sorted([x for x in cands if x[1] < close], key=lambda x: -x[1])
+    return cands[:3]
+
+
+def scan_symbol(df, dd, is_index):
     o = df["Open"].to_numpy(float)
     h = df["High"].to_numpy(float)
     l = df["Low"].to_numpy(float)
     c = df["Close"].to_numpy(float)
     v = df["Volume"].to_numpy(float)
     times = list(df.index)
+    days = [t.date() for t in times]
     n = len(df)
+    d_dates, d_arr = dd
 
-    ema = pine_ema(c, EMA_LEN)
+    ema_f = pine_ema(c, EMA_FAST)
+    ema_s = pine_ema(c, EMA_SLOW)
     atr = pine_atr(h, l, c, ATR_LEN)
     vol_ma = pd.Series(v).rolling(VOL_LEN).mean().to_numpy()
+    has_vol = not (is_index or v.sum() == 0)
 
-    # indices have no volume on Yahoo -> volume filter cannot work, so skip it for them
-    use_vol = USE_VOLUME and not (index_symbol or v.sum() == 0)
-
-    mother_high = mother_low = np.nan
-    mother_bar = None
-    waiting_breakout = False
-    waiting_conf = False
-    breakout_dir = 0
-    breakout_bar = None
-    breakout_level = np.nan
-    breakout_sl = np.nan
-    bo_mother = None
-    bo_vr = None
-
+    lv_cache = {}
+    touched = [False] * n
     signals = []
+    tol = TOUCH_TOL_PCT / 100.0
 
     for i in range(n):
-        # expire old setup
-        if waiting_breakout and mother_bar is not None and i - mother_bar > MAX_WAIT:
-            waiting_breakout = False
-            waiting_conf = False
-            breakout_dir = 0
+        day = days[i]
+        if day not in lv_cache:
+            lv_cache[day] = levels_for_day(day, d_dates, d_arr)
+        lv = lv_cache[day]
+        if lv is None:
+            continue
+        p = lv["p"]
+        touched[i] = (l[i] <= p * (1 + tol)) and (h[i] >= p * (1 - tol))
+        if not touched[i]:
+            continue
 
-        rng = h[i] - l[i]
-        body_pct = abs(c[i] - o[i]) / rng * 100 if rng > 0 else 0.0
-        mother_cand = (not np.isnan(atr[i])) and rng >= atr[i] * MIN_MOTHER_ATR \
-            and rng <= atr[i] * MAX_MOTHER_ATR and body_pct >= MIN_BODY_PCT
+        same_day_prev = i > 0 and days[i - 1] == day
+        if same_day_prev and touched[i - 1]:
+            continue                                   # previous candle already touched P -> no alert
 
-        if mother_cand and not waiting_breakout and not waiting_conf:
-            mother_high, mother_low, mother_bar = h[i], l[i], i
-            waiting_breakout = True
+        # direction on candle close
+        if c[i] > p:
+            side = "CE"
+        elif c[i] < p:
+            side = "PE"
+        else:
+            side = "CE" if c[i] >= o[i] else "PE"
 
-        vol_ok = (not use_vol) or ((not np.isnan(vol_ma[i])) and v[i] >= vol_ma[i] * VOL_MULT)
-        bull_ok = (not USE_EMA) or (c[i] > ema[i])
-        bear_ok = (not USE_EMA) or (c[i] < ema[i])
-        prev_close = c[i - 1] if i > 0 else np.nan
+        # where did price come from?
+        ref = c[i - 1] if same_day_prev else o[i]
+        came_from_above = ref > p
+        if came_from_above:
+            kind = "Support bounce" if side == "CE" else "Breakdown"
+        else:
+            kind = "Breakout" if side == "CE" else "Resistance rejection"
 
-        break_up = waiting_breakout and i > mother_bar and c[i] > mother_high and prev_close <= mother_high
-        break_down = waiting_breakout and i > mother_bar and c[i] < mother_low and prev_close >= mother_low
+        vr = None
+        if has_vol and not np.isnan(vol_ma[i]) and vol_ma[i] > 0:
+            vr = v[i] / vol_ma[i]
 
-        if break_up and vol_ok and bull_ok:
-            waiting_breakout = False
-            waiting_conf = True
-            breakout_dir = 1
-            breakout_bar = i
-            breakout_level = mother_high
-            breakout_sl = mother_low
-            bo_mother = (mother_bar, mother_high, mother_low)
-            bo_vr = (v[i] / vol_ma[i]) if (not np.isnan(vol_ma[i]) and vol_ma[i] > 0) else None
-
-        if break_down and vol_ok and bear_ok:
-            waiting_breakout = False
-            waiting_conf = True
-            breakout_dir = -1
-            breakout_bar = i
-            breakout_level = mother_low
-            breakout_sl = mother_high
-            bo_mother = (mother_bar, mother_high, mother_low)
-            bo_vr = (v[i] / vol_ma[i]) if (not np.isnan(vol_ma[i]) and vol_ma[i] > 0) else None
-
-        buy_ce = buy_pe = False
-        if waiting_conf and i == breakout_bar + 1:
-            if breakout_dir == 1 and c[i] > breakout_level and l[i] > breakout_level:
-                buy_ce = True
-            elif breakout_dir == -1 and c[i] < breakout_level and h[i] < breakout_level:
-                buy_pe = True
-            waiting_conf = False
-
-        if buy_ce or buy_pe:
-            vr = bo_vr
-            signals.append({
-                "side": "CE" if buy_ce else "PE",
-                "time": times[i],
-                "close": float(c[i]),
-                "sl": float(breakout_sl),
-                "level": float(breakout_level),
-                "bo_time": times[breakout_bar],
-                "bo_close": float(c[breakout_bar]),
-                "m_time": times[bo_mother[0]],
-                "m_high": float(bo_mother[1]),
-                "m_low": float(bo_mother[2]),
-                "vol_ratio": vr,
-            })
+        score, notes, width, wtype = quality(side, o[i], h[i], l[i], c[i], atr[i], ema_f[i], ema_s[i], vr, lv)
+        sl = float(l[i]) if side == "CE" else float(h[i])
+        signals.append({
+            "side": side, "time": times[i], "close": float(c[i]), "p": float(p),
+            "tc": float(lv["tc"]), "bc": float(lv["bc"]),
+            "sl": sl, "targets": pick_targets(side, float(c[i]), lv),
+            "kind": kind, "from_above": came_from_above,
+            "score": score, "notes": notes, "width": width, "wtype": wtype,
+        })
     return signals
 
 
@@ -313,37 +407,43 @@ def fmt_price(x):
     return f"{x:,.2f}"
 
 
-def fmt_t(ts, ref=None):
-    """'10:15' if same day as ref else '17 Oct 10:15'."""
-    if ref is not None and ts.date() == ref.date():
-        return ts.strftime("%H:%M")
-    return ts.strftime("%d %b %H:%M")
+def grade(score):
+    if score >= 8:
+        return "STRONG ⭐"
+    if score >= 6:
+        return "GOOD"
+    if score >= 4:
+        return "AVERAGE"
+    return "WEAK"
 
 
 def build_message(u, s):
     is_ce = s["side"] == "CE"
     icon = "🟢" if is_ce else "🔴"
     risk = abs(s["close"] - s["sl"])
-    sign = 1 if is_ce else -1
-    tg = []
-    for rr in TARGET_RRS:
-        tg.append(f"T{len(tg) + 1} ({rr:g}R) {fmt_price(s['close'] + sign * rr * risk)}")
     risk_pct = risk / s["close"] * 100 if s["close"] else 0
     link = f"https://in.tradingview.com/chart/?symbol={quote(u['tv'], safe='')}&interval=30"
+    bar = "█" * s["score"] + "░" * (10 - s["score"])
+
+    if s["targets"]:
+        tg = " | ".join(f"T{k + 1} {nm} {fmt_price(px)}" for k, (nm, px) in enumerate(s["targets"]))
+    else:
+        tg = "—"
+    approach = "upar se aayi" if s["from_above"] else "neeche se aayi"
 
     lines = [
-        f"{icon} <b>BUY {s['side']}</b> — <b>{escape(u['name'])}</b>",
+        f"{icon} <b>BUY {s['side']}</b> — <b>{escape(u['name'])}</b>  (P touch)",
         f"🕒 <b>Candle:</b> {s['time'].strftime('%d %b %Y, %H:%M')} IST (30m)",
+        f"⭐ <b>Quality: {s['score']}/10</b> {grade(s['score'])}  {bar}",
+        f"🎯 Setup: {s['kind']} (price {approach})",
+        f"⚫ P (pivot): {fmt_price(s['p'])}  | TC {fmt_price(s['tc'])} | BC {fmt_price(s['bc'])}",
         f"💰 Entry (candle close): {fmt_price(s['close'])}",
         f"🛑 SL: {fmt_price(s['sl'])}  (risk {fmt_price(risk)} | {risk_pct:.2f}%)",
-        "🎯 " + " | ".join(tg),
-        f"👩 Mother: {fmt_t(s['m_time'], s['time'])}  H {fmt_price(s['m_high'])} / L {fmt_price(s['m_low'])}",
-        f"⚡ Breakout candle: {fmt_t(s['bo_time'], s['time'])} (close {fmt_price(s['bo_close'])})",
+        f"🎯 {tg}",
+        "🔎 " + " • ".join(s["notes"]),
+        f"📈 <a href=\"{link}\">TradingView chart</a>",
+        "<i>Levels underlying price ke hain, option premium ke nahi.</i>",
     ]
-    if s["vol_ratio"] is not None:
-        lines.append(f"📊 Breakout candle volume: {s['vol_ratio']:.1f}x of {VOL_LEN}-bar avg")
-    lines.append(f"📈 <a href=\"{link}\">TradingView chart</a>")
-    lines.append("<i>Target/SL underlying price ke hain, option premium ke nahi.</i>")
     return "\n".join(lines)
 
 
@@ -398,66 +498,62 @@ def main():
     now = datetime.now(IST)
     today = now.date()
     universe = build_universe()
-    print(f"Now (IST): {now:%Y-%m-%d %H:%M} | symbols: {len(universe)}")
+    print(f"Now (IST): {now:%Y-%m-%d %H:%M} | symbols: {len(universe)} | MIN_QUALITY={MIN_QUALITY:g}")
 
-    data = fetch_all(universe)
-    print(f"Fetched data for {len(data)}/{len(universe)} symbols")
-    if not data:
+    intraday, daily = fetch_all(universe)
+    print(f"Fetched data for {len(intraday)}/{len(universe)} symbols")
+    if not intraday:
         print("No data fetched at all — exiting without touching state.")
-        send_telegram("⚠️ <b>ROMYO scanner</b>: Yahoo se data nahi mila (rate-limit/blocked ho sakta hai). Agli run mein dobara try hoga.")
+        send_telegram("⚠️ <b>CPR scanner</b>: Yahoo se data nahi mila (rate-limit/blocked ho sakta hai). Agli run mein dobara try hoga.")
         sys.exit(1)
 
-    all_signals = []  # (universe item, signal)
+    all_signals = []
     all_dates = set()
     for u in universe:
-        df = data.get(u["y"])
+        df = intraday.get(u["y"])
         if df is None:
             continue
         df = drop_open_candle(df, now)
-        if len(df) < ATR_LEN + 5:
+        if len(df) < EMA_SLOW + 5:
             continue
-        all_dates.update(d for d in df.index.date)
-        for s in scan_symbol(df, u["index"]):
+        all_dates.update(df.index.date)
+        for s in scan_symbol(df, daily[u["y"]], u["index"]):
             all_signals.append((u, s))
-
     all_signals.sort(key=lambda x: (x[1]["time"], x[0]["name"]))
 
     if all_dates:
-        print(f"Latest closed candle date in data: {max(all_dates)} | trading days loaded: {len(all_dates)}")
+        print(f"Latest closed candle date in data: {max(all_dates)}")
     by_day = {}
     for _, s_ in all_signals:
         by_day[s_["time"].date()] = by_day.get(s_["time"].date(), 0) + 1
-    print("Signals found per day (last 5):", dict(sorted(by_day.items())[-5:]))
+    print("P-touch signals per day (last 5):", dict(sorted(by_day.items())[-5:]))
 
     if DEBUG:
         d3 = sorted(all_dates)[-3:]
         print("---- DEBUG: signals of last 3 trading days ----")
         for u, s in all_signals:
             if s["time"].date() in d3:
-                print(f"{u['name']:<12} BUY {s['side']} candle {s['time']:%d-%b %H:%M} close {s['close']:.2f} SL {s['sl']:.2f}")
+                print(f"{u['name']:<12} BUY {s['side']} {s['time']:%d-%b %H:%M} P {s['p']:.2f} close {s['close']:.2f} Q {s['score']}/10 {s['kind']}")
 
     state = load_state()
     first_run = not state.get("initialized")
     sent = set(state.get("sent", []))
 
     if first_run:
-        # every signal that exists right now is marked as seen; only TODAY's are sent (once)
-        for u, s in all_signals:
+        for u, s in all_signals:                       # everything existing now = seen
             sent.add(sig_key(u, s))
-        to_send = [(u, s) for u, s in all_signals if s["time"].date() == today]
-        header = (f"📌 <b>ROMYO Confirmed MC Breakout</b>\n"
-                  f"Aaj ({today:%d %b %Y}) ke ab tak ke signals: <b>{len(to_send)}</b>\n"
-                  f"Iske baad sirf live signals aayenge.")
-        send_telegram(header)
+        to_send = [(u, s) for u, s in all_signals if s["time"].date() == today and s["score"] >= MIN_QUALITY]
+        send_telegram(f"📌 <b>CPR P-touch scanner</b>\nAaj ({today:%d %b %Y}) ke ab tak ke signals: <b>{len(to_send)}</b>\n"
+                      f"Iske baad sirf live signals aayenge.")
         mark_after_send = False
     else:
         to_send = [(u, s) for u, s in all_signals
-                   if s["time"].date() == today and sig_key(u, s) not in sent]
+                   if s["time"].date() == today and sig_key(u, s) not in sent and s["score"] >= MIN_QUALITY]
         mark_after_send = True
 
     print(f"Signals to send: {len(to_send)} (first_run={first_run})")
     if not first_run and not to_send:
-        print("Not first run -> only NEW signals of TODAY are sent; none found. (State reset ke bina pichle din ke signals nahi aate.)")
+        print("Not first run -> only NEW signals of TODAY are sent; none found.")
 
     ok_count = 0
     for u, s in to_send:
