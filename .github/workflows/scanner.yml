@@ -1,24 +1,26 @@
-name: CPR Pivot Touch Scanner
+name: scanner
 
 on:
   schedule:
-    # Candle close IST: 9:45, 10:15 ... 15:30  (UTC = IST - 5:30)
-    # Runs ~5 min after each candle close, Mon-Fri
-    - cron: "20,50 4-9 * * 1-5"   # 09:50 IST -> 15:20 IST
-    - cron: "20 10 * * 1-5"       # 15:50 IST (last 15:15 candle)
+    # 15m candles: IST 09:31 se 15:16 tak har 15 min (UTC 04:01 - 09:46), phir last candle IST 15:31
+    - cron: '1,16,31,46 4-9 * * 1-5'
+    - cron: '1 10 * * 1-5'
   workflow_dispatch:
     inputs:
-      reset_state:
-        description: "ON karo = state delete karke fresh first run (aaj ke ab tak ke signals dobara)"
-        type: boolean
+      mode:
+        description: "auto = pehli baar Friday + phir live | friday = Friday ke signals dobara bhejo"
         required: false
-        default: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - friday
 
 permissions:
   contents: write
 
 concurrency:
-  group: cpr-scanner
+  group: scanner
   cancel-in-progress: false
 
 jobs:
@@ -26,36 +28,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install dependencies
         run: pip install yfinance pandas numpy requests
-
-      - name: Reset state (manual only)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.reset_state }}
-        run: rm -f cpr_state*.json
 
       - name: Run scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          MIN_QUALITY: "0"
+          RUN_MODE: ${{ github.event.inputs.mode || 'auto' }}
         run: python main.py
 
       - name: Save state
-        if: always()
+        if: success()
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A -- 'cpr_state*.json' || true
+          git config user.name "scanner-bot"
+          git config user.email "scanner-bot@users.noreply.github.com"
+          git add state.json
           if git diff --cached --quiet; then
-            echo "No state change"
+            echo "No state changes"
           else
-            git commit -m "update cpr scanner state [skip ci]"
-            git pull --rebase origin ${{ github.ref_name }} || true
+            git commit -m "update scanner state"
             git push
           fi
