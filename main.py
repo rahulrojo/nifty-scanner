@@ -32,14 +32,14 @@ RUN_MODE = os.environ.get("RUN_MODE", "auto").strip().lower()   # auto | friday
 STATE_FILE = "state.json"
 
 # Pine inputs
-LEFT_BARS = 5
+LEFT_BARS = 10
 RIGHT_BARS = 2          # mother candle offset
 USE_TREND = True
-EMA_LEN = 50
+EMA_LEN = 60
 RR = 3.0
 
 INTERVAL = "15m"
-BAR_MIN = 15
+BAR_MIN = 30
 PERIOD = "30d"
 MAX_SENT_KEYS = 3000
 
