@@ -1,26 +1,19 @@
-name: scanner
+name: ROMYO Mother Candle Scanner
 
 on:
   schedule:
-    # 15m candles: IST 09:31 se 15:16 tak har 15 min (UTC 04:01 - 09:46), phir last candle IST 15:31
-    - cron: '1,16,31,46 4-9 * * 1-5'
-    - cron: '1 10 * * 1-5'
+    # 30m candles close at 9:45, 10:15 ... 15:15, 15:30 IST. Runs 2 min after each close.
+    # (UTC = IST - 5:30)  ->  09:47 IST to 15:17 IST
+    - cron: "17,47 4-9 * * 1-5"
+    # 15:32 IST (last 15 min candle 15:15-15:30)
+    - cron: "2 10 * * 1-5"
   workflow_dispatch:
-    inputs:
-      mode:
-        description: "auto = pehli baar Friday + phir live | friday = Friday ke signals dobara bhejo"
-        required: false
-        default: auto
-        type: choice
-        options:
-          - auto
-          - friday
 
 permissions:
   contents: write
 
 concurrency:
-  group: scanner
+  group: mc-scanner
   cancel-in-progress: false
 
 jobs:
@@ -34,7 +27,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: pip install yfinance pandas numpy requests
@@ -43,18 +36,17 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          RUN_MODE: ${{ github.event.inputs.mode || 'auto' }}
         run: python main.py
 
-      - name: Save state
-        if: success()
+      - name: Save state (sent signals)
         run: |
           git config user.name "scanner-bot"
           git config user.email "scanner-bot@users.noreply.github.com"
-          git add state.json
+          git add mc_state.json
           if git diff --cached --quiet; then
-            echo "No state changes"
+            echo "No state change"
           else
             git commit -m "update scanner state"
+            git pull --rebase
             git push
           fi
