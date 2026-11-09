@@ -144,7 +144,7 @@ def nz(x):
     return 0.0 if x is None or (isinstance(x, float) and np.isnan(x)) else x
 
 
-def scan_symbol(df):
+def scan_symbol(df, dbg=False):
     o = df["Open"].values.astype(float)
     h = df["High"].values.astype(float)
     l = df["Low"].values.astype(float)
@@ -225,6 +225,14 @@ def scan_symbol(df):
         common = armed and in_sig[i] and body_ok and size_ok and score4 >= MIN_SCORE
         ce = common and brk_up and not brk_dn and c[i] > o[i] and trend_ce and vwap_ce and risk_ok_ce
         pe = common and brk_dn and not brk_up and c[i] < o[i] and trend_pe and vwap_pe and risk_ok_pe
+        if dbg and i >= n - 40:
+            print(f"{df.index[i].strftime('%d%b %H:%M')} C={c[i]:.2f} mother={m_time.strftime('%d%b %H:%M')} "
+                  f"H={m_high:.2f} L={m_low:.2f} mRange/ATR={(m_high - m_low) / atr[i]:.2f} ATR={atr[i]:.2f} "
+                  f"EMA={ema[i]:.2f} VWAP={vwap[i]:.2f} vol={v[i]:.0f} avg={avgvol[i]:.0f} mVol={m_vol:.0f} "
+                  f"Q4={score4}(s1={int(sc1)} s2={int(sc2)} s3={int(sc3)} s4={int(sc4)}) inside={inside_count} "
+                  f"bodyOk={body_ok} sizeOk={size_ok} brkDn={brk_dn} brkUp={brk_up} "
+                  f"trendPE={trend_pe} vwapPE={vwap_pe} riskPE/ATR={risk_pe / atr[i]:.2f} "
+                  f"sig={'CE' if ce else ('PE' if pe else '-')}")
         if not (ce or pe):
             continue
 
@@ -334,7 +342,7 @@ def main():
             d = frames[dbg]
             print(f"--- DEBUG {dbg}: last 30 candles (IST, candle start time) ---")
             print(d.tail(30)[["Open", "High", "Low", "Close", "Volume"]].round(2).to_string())
-            for s in scan_symbol(d):
+            for s in scan_symbol(d, dbg=True):
                 print("SIGNAL", s["side"], s["start"], "| mother", s["m_time"],
                       round(s["m_high"], 2), round(s["m_low"], 2), "| Q10", s["q10"], "Q4", s["score4"])
         else:
