@@ -311,6 +311,8 @@ def fmt_msg(name, tv, s):
 
 # ===== State =====
 def load_state():
+    if os.getenv("FRESH_START", "").lower() == "true":
+        return {"sent": []}, True          # pichla working din + aaj ke sab signal dobara bhejo
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE) as f:
