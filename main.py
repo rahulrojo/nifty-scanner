@@ -1,749 +1,362 @@
+"""
+Mother Candle Breakout | BUY CE / BUY PE  -> 30 min Telegram scanner
+Pine v5 indicator ka Python port (Auto mode).
+
+Secrets (GitHub -> Settings -> Secrets -> Actions):
+    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID  (channel id jaise -1001234567890)
+"""
 import os
 import json
 import time
+import html
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
 import requests
 import yfinance as yf
-import pandas as pd
-import numpy as np
 
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+IST = "Asia/Kolkata"
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+STATE_FILE = "state.json"
+FIRST_RUN_SESSIONS = int(os.getenv("FIRST_RUN_SESSIONS", "2"))  # pehli run: pichla working day + aaj
 
-# ==========================================
-# ROMYO MOTHER CANDLE BREAKOUT SCANNER
-# TIMEFRAME: 30 MINUTES
-# ==========================================
-
-IST = ZoneInfo("Asia/Kolkata")
-
-INTERVAL = "30m"
-PERIOD = "60d"
-
-EMA_LEN = 21
-ATR_LEN = 14
-
-MIN_MOTHER_ATR = 1.0
-MAX_MOTHER_ATR = 2.5
+# ===== Pine inputs (defaults same as indicator) =====
+MIN_ATR_MULT = 1.0
+MAX_ATR_MULT = 2.5
 MIN_BODY_PCT = 50
-
 MIN_INSIDE = 1
-MAX_WAIT_BARS = 8
-
-BREAK_BODY_PCT = 40
-MAX_BREAK_ATR = 2.0
-
+MAX_BARS = 8
+MOTHER_SESS = (9 * 60 + 15, 13 * 60 + 30)   # 0915-1330 (bar start time)
+SIG_SESS = (9 * 60 + 15, 14 * 60 + 30)      # 0915-1430 (bar start time)
+BRK_BODY_PCT = 40
+MAX_BRK_ATR = 2.0
+EMA_LEN = 21
 MIN_SCORE = 2
-MAX_RISK_ATR = 2.0
-
 RR1 = 1.0
 RR2 = 2.0
-
+MAX_RISK_ATR = 2.0
 TIME_STOP = 6
+# useClose=True, bufPct=0, fullyOutside=False, keepAlive=True, SL = Mother Midpoint, trend+VWAP filter ON
 
-STATE_FILE = "signal_state.json"
+# ===== Symbols =====
+STOCKS = """ADANIENT ADANIPORTS ADANIGREEN APOLLOHOSP ASHOKLEY AUBANK AUROPHARMA AXISBANK BAJAJ-AUTO
+BAJFINANCE BAJAJFINSV BANDHANBNK BANKBARODA BEL BHEL BHARTIARTL BIOCON BPCL CANBK CHOLAFIN CIPLA
+COALINDIA COFORGE DIVISLAB DIXON DLF DRREDDY EICHERMOT FEDERALBNK GAIL GLENMARK GODREJPROP GRASIM
+HAL HAVELLS HCLTECH HDFCBANK HEROMOTOCO HINDALCO HINDPETRO ICICIBANK IDFCFIRSTB IEX INDHOTEL INDIGO
+INDUSINDBK INFY IOC IRCTC IRFC ITC JINDALSTEL JIOFIN JSWSTEEL JUBLFOOD KOTAKBANK LAURUSLABS LODHA LT
+LUPIN M&M MANAPPURAM MARUTI MAXHEALTH MCX MUTHOOTFIN NATIONALUM NAUKRI NMDC NTPC OBEROIRLTY ONGC
+PERSISTENT PFC PIDILITIND PNB POLYCAB POWERGRID RECLTD RELIANCE SAIL SBILIFE SBIN SHRIRAMFIN SIEMENS
+SUNPHARMA TATAPOWER TATASTEEL TCS TECHM TITAN TORNTPHARM TRENT TVSMOTOR ULTRACEMCO UNIONBANK VEDL
+WIPRO YESBANK ETERNAL""".split()
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# name: (yfinance ticker, tradingview symbol)
+INDEXES = {
+    "NIFTY": ("^NSEI", "NSE:NIFTY"),
+    "BANKNIFTY": ("^NSEBANK", "NSE:BANKNIFTY"),
+    "FINNIFTY": ("NIFTY_FIN_SERVICE.NS", "NSE:CNXFINANCE"),
+    "MIDCPNIFTY": ("NIFTY_MID_SELECT.NS", "NSE:NIFTY_MID_SELECT"),
+    "SENSEX": ("^BSESN", "BSE:SENSEX"),
+}
 
-if not CHAT_ID:
-    CHAT_ID = "1003921675472"
 
-# ==========================================
-# STOCK UNIVERSE
-# ==========================================
+def build_universe():
+    u = {}
+    for s in STOCKS:
+        tv = "NSE:" + s.replace("&", "_").replace("-", "_")
+        u[s] = (s + ".NS", tv)
+    u.update(INDEXES)
+    return u
 
-STOCKS = [
-    "RELIANCE", "HDFCBANK", "ICICIBANK",
-    "SBIN", "AXISBANK", "KOTAKBANK",
-    "INDUSINDBK", "BANKBARODA", "PNB",
-    "CANBK", "UNIONBANK", "IDFCFIRSTB",
-    "FEDERALBNK", "AUBANK",
 
-    "BAJFINANCE", "BAJAJFINSV", "SHRIRAMFIN",
-    "CHOLAFIN", "MUTHOOTFIN", "RECLTD",
-    "PFC", "IRFC", "HDFCLIFE", "SBILIFE",
-    "ICICIPRULI", "LICI",
+# ===== Data =====
+def to_30m(raw):
+    """15m data -> NSE 30m candles (09:15, 09:45 ... 15:15), sirf poori bani candles."""
+    d = raw.dropna(subset=["Open", "High", "Low", "Close"]).copy()
+    if d.empty:
+        return None
+    idx = pd.to_datetime(d.index)
+    idx = idx.tz_localize("UTC") if idx.tz is None else idx
+    d.index = idx.tz_convert(IST)
+    d = d.between_time("09:15", "15:29")
+    if d.empty:
+        return None
+    if "Volume" not in d:
+        d["Volume"] = 0.0
+    d["Volume"] = d["Volume"].fillna(0)
+    g = d.resample("30min", offset="15min")
+    out = g.agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"})
+    out["n"] = g["Close"].count()
+    out = out[out["n"] > 0]
+    last_slot = (out.index.hour == 15) & (out.index.minute == 15)
+    need = np.where(last_slot, 1, 2)          # 15:15 candle me sirf ek 15m bar hota hai
+    out = out[out["n"].values >= need]
+    last_slot = (out.index.hour == 15) & (out.index.minute == 15)
+    ends = out.index + pd.Timedelta(minutes=30)
+    ends = pd.DatetimeIndex(np.where(last_slot, out.index + pd.Timedelta(minutes=15), ends))
+    now = pd.Timestamp.now(tz=IST)
+    out = out[ends <= now]                      # chalu (adhuri) candle hata do
+    out["End"] = ends[ends <= now]
+    return out if len(out) > 40 else None
 
-    "INFY", "TCS", "HCLTECH", "WIPRO",
-    "TECHM", "LTIM", "PERSISTENT",
-    "COFORGE", "MPHASIS",
 
-    "LT", "SIEMENS", "ABB", "BEL",
-    "HAL", "BHEL", "RVNL", "IRCTC",
+def download_all(universe):
+    tickers = [v[0] for v in universe.values()]
+    rev = {v[0]: k for k, v in universe.items()}
+    frames = {}
+    for i in range(0, len(tickers), 25):
+        chunk = tickers[i:i + 25]
+        for attempt in range(3):
+            try:
+                data = yf.download(chunk, period="30d", interval="15m", group_by="ticker",
+                                   auto_adjust=False, threads=True, progress=False)
+                break
+            except Exception as e:
+                print("download retry", e)
+                time.sleep(3)
+        else:
+            continue
+        for t in chunk:
+            try:
+                df = data[t] if isinstance(data.columns, pd.MultiIndex) else data
+                f = to_30m(df)
+                if f is not None:
+                    frames[rev[t]] = f
+            except Exception:
+                pass
+        time.sleep(1)
+    return frames
 
-    "ONGC", "OIL", "IOC", "BPCL",
-    "HINDPETRO", "GAIL", "NTPC",
-    "POWERGRID", "TATAPOWER", "ADANIPOWER",
-    "ADANIENT", "ADANIPORTS",
 
-    "JSWSTEEL", "TATASTEEL", "HINDALCO",
-    "VEDL", "SAIL", "COALINDIA",
-    "NMDC", "JINDALSTEL",
+# ===== Indicators =====
+def rma(arr, n):
+    out = np.full(len(arr), np.nan)
+    if len(arr) < n:
+        return out
+    out[n - 1] = np.nanmean(arr[:n])
+    for i in range(n, len(arr)):
+        out[i] = (out[i - 1] * (n - 1) + arr[i]) / n
+    return out
 
-    "TATAMOTORS", "M&M", "MARUTI",
-    "EICHERMOT", "HEROMOTOCO", "BAJAJ-AUTO",
-    "TVSMOTOR", "ASHOKLEY",
 
-    "APOLLOHOSP", "SUNPHARMA", "DRREDDY",
-    "CIPLA", "DIVISLAB", "ZYDUSLIFE",
-    "LUPIN", "AUROPHARMA", "ALKEM",
-    "MAXHEALTH",
+def nz(x):
+    return 0.0 if x is None or (isinstance(x, float) and np.isnan(x)) else x
 
-    "HDFCAMC", "CDSL", "BSE", "MCX",
 
-    "DLF", "GODREJPROP", "OBEROIRLTY",
-    "LODHA", "PHOENIX",
+def scan_symbol(df):
+    o = df["Open"].values.astype(float)
+    h = df["High"].values.astype(float)
+    l = df["Low"].values.astype(float)
+    c = df["Close"].values.astype(float)
+    v = df["Volume"].values.astype(float)
+    n = len(df)
+    days = np.array([t.date() for t in df.index])
+    mins = np.array([t.hour * 60 + t.minute for t in df.index])
 
-    "ULTRACEMCO", "GRASIM", "AMBUJACEM",
-    "SHREECEM",
+    pc = np.concatenate([[c[0]], c[:-1]])
+    tr = np.maximum(h - l, np.maximum(np.abs(h - pc), np.abs(l - pc)))
+    atr = rma(tr, 14)
+    ema = pd.Series(c).ewm(span=EMA_LEN, adjust=False).mean().values
+    hlc3 = (h + l + c) / 3
+    pv = pd.Series(hlc3 * v).groupby(days).cumsum().values
+    cv = pd.Series(v).groupby(days).cumsum().values
+    with np.errstate(divide="ignore", invalid="ignore"):
+        vwap = np.where(cv > 0, pv / cv, np.nan)
+    avgvol = pd.Series(v).rolling(20).mean().values
 
-    "ASIANPAINT", "TITAN", "TRENT",
-    "ETERNAL", "ITC", "HINDUNILVR",
-    "NESTLEIND", "BRITANNIA", "TATACONSUM",
+    in_mother = (mins >= MOTHER_SESS[0]) & (mins < MOTHER_SESS[1])
+    in_sig = (mins >= SIG_SESS[0]) & (mins < SIG_SESS[1])
 
-    "PIDILITIND", "DABUR", "GODREJCP",
-    "COLPAL", "MARICO", "BERGEPAINT",
+    m_active = False
+    m_high = m_low = m_vol = last_child = np.nan
+    m_bar = -1
+    m_time = None
+    inside_count = 0
+    sigs = []
 
-    "INDIGO", "CONCOR", "DELHIVERY"
-]
+    for i in range(1, n):
+        day_chg = days[i] != days[i - 1]
+        if m_active and (i - m_bar > MAX_BARS or day_chg):
+            m_active = False
 
-STOCKS = list(dict.fromkeys(STOCKS))
+        inside_bar = h[i] <= h[i - 1] and l[i] >= l[i - 1]
+        c_range = h[i - 1] - l[i - 1]
+        c_body = abs(c[i - 1] - o[i - 1])
+        c_atr = nz(atr[i - 1])
+        c_ok = (c_range >= MIN_ATR_MULT * c_atr and c_range <= MAX_ATR_MULT * c_atr
+                and c_body >= MIN_BODY_PCT / 100.0 * c_range and in_mother[i - 1])
 
-INDEXES = [
-    "^NSEI",
-    "^NSEBANK",
-    "^CNXIT",
-    "^CNXPHARMA",
-    "^CNXAUTO",
-    "^CNXMETAL",
-    "^CNXFMCG",
-    "^CNXENERGY",
-    "^CNXREALTY",
-    "^CNXPSUBANK",
-    "^CNXINFRA",
-    "^CNXMEDIA"
-]
+        if (not m_active) and inside_bar and c_ok:
+            m_high, m_low, m_vol = h[i - 1], l[i - 1], v[i - 1]
+            m_bar, m_active, inside_count = i - 1, True, 1
+            last_child = h[i] - l[i]
+            m_time = df.index[i - 1]
+        elif m_active and i > m_bar and h[i] <= m_high and l[i] >= m_low:
+            inside_count += 1
+            last_child = h[i] - l[i]
 
-SYMBOLS = STOCKS + INDEXES
+        if not (m_active and i > m_bar):
+            continue
 
-# ==========================================
-# TELEGRAM
-# ==========================================
+        has_vol = v[i] > 0
+        sc1 = (not has_vol) or (m_vol >= avgvol[i])
+        sc2 = inside_count >= 2
+        sc3 = (not np.isnan(last_child)) and last_child <= 0.6 * (m_high - m_low)
+        sc4 = (not has_vol) or (v[i] >= avgvol[i])
+        score4 = int(sc1) + int(sc2) + int(sc3) + int(sc4)
 
-def send_telegram(message):
+        up_lv, dn_lv = m_high, m_low
+        armed = inside_count >= MIN_INSIDE
+        brk_up = c[i] > up_lv
+        brk_dn = c[i] < dn_lv
+        rng = h[i] - l[i]
+        body_ok = rng > 0 and abs(c[i] - o[i]) >= BRK_BODY_PCT / 100.0 * rng
+        size_ok = rng <= MAX_BRK_ATR * atr[i]
+        mid = (m_high + m_low) / 2
+        vw_na = np.isnan(vwap[i])
+        trend_ce, trend_pe = c[i] > ema[i], c[i] < ema[i]
+        vwap_ce = vw_na or c[i] > vwap[i]
+        vwap_pe = vw_na or c[i] < vwap[i]
+        risk_ce, risk_pe = c[i] - mid, mid - c[i]
+        risk_ok_ce = 0 < risk_ce <= MAX_RISK_ATR * atr[i]
+        risk_ok_pe = 0 < risk_pe <= MAX_RISK_ATR * atr[i]
 
-    if not BOT_TOKEN:
-        print("ERROR: TELEGRAM_BOT_TOKEN missing")
+        common = armed and in_sig[i] and body_ok and size_ok and score4 >= MIN_SCORE
+        ce = common and brk_up and not brk_dn and c[i] > o[i] and trend_ce and vwap_ce and risk_ok_ce
+        pe = common and brk_dn and not brk_up and c[i] < o[i] and trend_pe and vwap_pe and risk_ok_pe
+        if not (ce or pe):
+            continue
+
+        is_ce = ce
+        entry = c[i]
+        sl = mid
+        risk = abs(entry - sl)
+        t1 = entry + risk * RR1 if is_ce else entry - risk * RR1
+        t2 = entry + risk * RR2 if is_ce else entry - risk * RR2
+
+        # ===== Quality /10 =====
+        q = score4                                                    # Pine score (max 4)
+        q += 1 if abs(c[i] - o[i]) >= 0.7 * rng else 0                # strong body
+        slope_ok = i >= 3 and ((ema[i] > ema[i - 3]) if is_ce else (ema[i] < ema[i - 3]))
+        q += 1 if slope_ok else 0                                     # EMA slope saath me
+        dist = (c[i] - ema[i]) if is_ce else (ema[i] - c[i])
+        q += 1 if dist >= 0.5 * atr[i] else 0                         # EMA se dur (trend strength)
+        q += 1 if risk <= 1.0 * atr[i] else 0                         # tight stoploss
+        near_ext = (c[i] - l[i]) / rng >= 0.75 if is_ce else (h[i] - c[i]) / rng >= 0.75
+        q += 1 if near_ext else 0                                     # close candle ke extreme par
+        q += 1 if ((not has_vol) or v[i] >= 1.5 * avgvol[i]) else 0   # strong volume
+        q = int(min(q, 10))
+
+        sigs.append(dict(
+            idx=i, side="BUY CE" if is_ce else "BUY PE",
+            start=df.index[i], end=df["End"].iloc[i],
+            entry=entry, sl=sl, t1=t1, t2=t2, score4=score4, q10=q,
+            m_time=m_time, m_high=m_high, m_low=m_low,
+        ))
+        m_active = False   # signal aate hi mother ka kaam khatam
+    return sigs
+
+
+# ===== Telegram =====
+def send(text):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    for _ in range(4):
+        try:
+            r = requests.post(url, json={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML",
+                                         "disable_web_page_preview": True}, timeout=30)
+        except Exception as e:
+            print("send error", e)
+            time.sleep(3)
+            continue
+        if r.status_code == 200:
+            return True
+        if r.status_code == 429:
+            time.sleep(r.json().get("parameters", {}).get("retry_after", 5) + 1)
+            continue
+        print("telegram error", r.text)
         return False
+    return False
 
-    url = (
-        f"https://api.telegram.org/"
-        f"bot{BOT_TOKEN}/sendMessage"
+
+def fmt_msg(name, tv, s):
+    ce = s["side"] == "BUY CE"
+    q = s["q10"]
+    label = "Strong" if q >= 8 else ("Good" if q >= 6 else "Average")
+    mt = s["m_time"]
+    link = f"https://in.tradingview.com/chart/?symbol={tv}&interval=30"
+    return (
+        f"{'🟢' if ce else '🔴'} <b>{s['side']}</b> | <b>{html.escape(name)}</b>\n"
+        f"🕒 Candle: <b>{s['start'].strftime('%d %b %Y')}</b>, "
+        f"{s['start'].strftime('%H:%M')} - {s['end'].strftime('%H:%M')} IST (30m)\n"
+        f"⭐ Quality: <b>{q}/10</b> ({label}) | Pine Q {s['score4']}/4\n"
+        f"━━━━━━━━━━━━\n"
+        f"Entry (close): <b>{s['entry']:.2f}</b>\n"
+        f"🛑 SL: <b>{s['sl']:.2f}</b>\n"
+        f"🎯 T1: <b>{s['t1']:.2f}</b> | T2: <b>{s['t2']:.2f}</b>\n"
+        f"━━━━━━━━━━━━\n"
+        f"📦 Mother: {mt.strftime('%d %b, %H:%M')} | H {s['m_high']:.2f} / L {s['m_low']:.2f}\n"
+        f"⏳ Time stop: {TIME_STOP} candles\n"
+        f"📈 <a href=\"{link}\">TradingView chart</a>"
     )
 
-    try:
-        response = requests.post(
-            url,
-            data={
-                "chat_id": CHAT_ID,
-                "text": message,
-                "parse_mode": "HTML"
-            },
-            timeout=20
-        )
 
-        print("Telegram:", response.text)
-
-        return response.ok
-
-    except Exception as e:
-        print("Telegram error:", e)
-        return False
-
-
-# ==========================================
-# STATE MANAGEMENT
-# ==========================================
-
+# ===== State =====
 def load_state():
-
     if os.path.exists(STATE_FILE):
-
         try:
-            with open(STATE_FILE, "r") as f:
-                return json.load(f)
-
+            with open(STATE_FILE) as f:
+                return json.load(f), False
         except Exception:
             pass
+    return {"sent": []}, True
 
-    return {}
 
-
-def save_state(state):
-
+def save_state(st):
+    st["sent"] = st["sent"][-3000:]
     with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
+        json.dump(st, f)
 
-
-# ==========================================
-# INDICATORS
-# ==========================================
-
-def calculate_indicators(df):
-
-    df = df.copy()
-
-    df["EMA"] = df["Close"].ewm(
-        span=EMA_LEN,
-        adjust=False
-    ).mean()
-
-    previous_close = df["Close"].shift(1)
-
-    tr = pd.concat([
-        df["High"] - df["Low"],
-        abs(df["High"] - previous_close),
-        abs(df["Low"] - previous_close)
-    ], axis=1).max(axis=1)
-
-    df["ATR"] = tr.ewm(
-        alpha=1 / ATR_LEN,
-        adjust=False
-    ).mean()
-
-    typical = (
-        df["High"] +
-        df["Low"] +
-        df["Close"]
-    ) / 3
-
-    date_group = pd.Series(
-        df.index.date,
-        index=df.index
-    )
-
-    pv = typical * df["Volume"]
-
-    df["VWAP"] = (
-        pv.groupby(date_group).cumsum() /
-        df["Volume"].groupby(date_group).cumsum()
-    )
-
-    df["AVG_VOL"] = df["Volume"].rolling(20).mean()
-
-    return df
-
-
-# ==========================================
-# QUALITY SCORE OUT OF 10
-# ==========================================
-
-def quality_score(
-    mother_vol,
-    avg_vol,
-    inside_count,
-    last_child,
-    mother_range,
-    volume,
-    body_pct,
-    atr,
-    candle_range
-):
-
-    score = 0
-
-    # Mother volume quality: 2 points
-    if mother_vol >= avg_vol:
-        score += 2
-
-    # Inside candle compression: 2 points
-    if inside_count >= 2:
-        score += 2
-
-    # Child candle contraction: 2 points
-    if (
-        last_child is not None
-        and last_child <= 0.6 * mother_range
-    ):
-        score += 2
-
-    # Breakout volume: 2 points
-    if volume >= avg_vol:
-        score += 2
-
-    # Breakout strength: 2 points
-    if body_pct >= 60:
-        score += 2
-    elif body_pct >= 50:
-        score += 1
-
-    return min(score, 10)
-
-
-# ==========================================
-# SESSION FILTER
-# ==========================================
-
-def in_session(timestamp, start, end):
-
-    t = timestamp.hour * 60 + timestamp.minute
-
-    return start <= t <= end
-
-
-# ==========================================
-# SCANNER LOGIC
-# ==========================================
-
-def scan_symbol(symbol, state):
-
-    ticker = symbol if symbol.startswith("^") else symbol + ".NS"
-
-    try:
-
-        df = yf.download(
-            ticker,
-            period=PERIOD,
-            interval=INTERVAL,
-            auto_adjust=False,
-            progress=False,
-            threads=False
-        )
-
-        if df is None or len(df) < 50:
-            return
-
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-
-        df = df[
-            ["Open", "High", "Low", "Close", "Volume"]
-        ].copy()
-
-        df = df.dropna()
-
-        if df.empty:
-            return
-
-        if df.index.tz is None:
-            df.index = df.index.tz_localize("UTC")
-
-        df.index = df.index.tz_convert(IST)
-
-        df = calculate_indicators(df)
-
-        # Incomplete candle remove
-        now = datetime.now(IST)
-
-        completed = (
-            df.index + pd.Timedelta(minutes=30)
-            <= now - pd.Timedelta(minutes=3)
-        )
-
-        df = df.loc[completed]
-
-        if len(df) < 30:
-            return
-
-        # Initial scan: recent trading session only
-        if symbol not in state:
-
-            cutoff = now - timedelta(days=2)
-
-        else:
-
-            cutoff = pd.Timestamp(
-                state[symbol]
-            ).to_pydatetime()
-
-        active = False
-
-        m_high = None
-        m_low = None
-        m_vol = None
-        m_bar = None
-
-        inside_count = 0
-        last_child = None
-
-        for i in range(1, len(df)):
-
-            row = df.iloc[i]
-            prev = df.iloc[i - 1]
-
-            ts = df.index[i]
-
-            if ts.to_pydatetime() <= cutoff:
-                continue
-
-            # Session
-            mother_session = in_session(
-                df.index[i - 1],
-                9 * 60 + 15,
-                13 * 60 + 30
-            )
-
-            signal_session = in_session(
-                ts,
-                9 * 60 + 15,
-                14 * 60 + 30
-            )
-
-            # =================================
-            # EXPIRE MOTHER CANDLE
-            # =================================
-
-            if active:
-
-                if i - m_bar > MAX_WAIT_BARS:
-
-                    active = False
-
-            # =================================
-            # DETECT MOTHER + INSIDE BAR
-            # =================================
-
-            inside = (
-                row["High"] <= prev["High"]
-                and row["Low"] >= prev["Low"]
-            )
-
-            prev_range = prev["High"] - prev["Low"]
-
-            prev_body = abs(
-                prev["Close"] - prev["Open"]
-            )
-
-            prev_atr = prev["ATR"]
-
-            mother_ok = (
-                pd.notna(prev_atr)
-                and prev_range >= MIN_MOTHER_ATR * prev_atr
-                and prev_range <= MAX_MOTHER_ATR * prev_atr
-                and prev_body >= MIN_BODY_PCT / 100 * prev_range
-                and mother_session
-            )
-
-            if not active and inside and mother_ok:
-
-                active = True
-
-                m_high = float(prev["High"])
-                m_low = float(prev["Low"])
-                m_vol = float(prev["Volume"])
-
-                m_bar = i - 1
-
-                inside_count = 1
-
-                last_child = float(
-                    row["High"] - row["Low"]
-                )
-
-            elif active:
-
-                if (
-                    row["High"] <= m_high
-                    and row["Low"] >= m_low
-                ):
-
-                    inside_count += 1
-
-                    last_child = float(
-                        row["High"] - row["Low"]
-                    )
-
-            if not active:
-                continue
-
-            # =================================
-            # BREAKOUT CONDITIONS
-            # =================================
-
-            mother_range = m_high - m_low
-
-            up_level = m_high
-            down_level = m_low
-
-            close_up = row["Close"] > up_level
-            close_down = row["Close"] < down_level
-
-            candle_range = row["High"] - row["Low"]
-
-            if candle_range <= 0:
-                continue
-
-            body = abs(
-                row["Close"] - row["Open"]
-            )
-
-            body_pct = body / candle_range * 100
-
-            body_ok = body_pct >= BREAK_BODY_PCT
-
-            size_ok = (
-                candle_range <= MAX_BREAK_ATR * row["ATR"]
-            )
-
-            armed = inside_count >= MIN_INSIDE
-
-            # Quality components
-            avg_vol = row["AVG_VOL"]
-
-            if pd.isna(avg_vol):
-                continue
-
-            q = quality_score(
-                m_vol,
-                avg_vol,
-                inside_count,
-                last_child,
-                mother_range,
-                row["Volume"],
-                body_pct,
-                row["ATR"],
-                candle_range
-            )
-
-            # Original Pine score out of 4
-            original_score = (
-                int(m_vol >= avg_vol) +
-                int(inside_count >= 2) +
-                int(
-                    last_child is not None
-                    and last_child <= 0.6 * mother_range
-                ) +
-                int(row["Volume"] >= avg_vol)
-            )
-
-            common = (
-                signal_session
-                and armed
-                and body_ok
-                and size_ok
-                and original_score >= MIN_SCORE
-            )
-
-            # =================================
-            # EMA / VWAP
-            # =================================
-
-            ema = row["EMA"]
-            vwap = row["VWAP"]
-
-            trend_ce = row["Close"] > ema
-            trend_pe = row["Close"] < ema
-
-            vwap_ce = (
-                pd.isna(vwap)
-                or row["Close"] > vwap
-            )
-
-            vwap_pe = (
-                pd.isna(vwap)
-                or row["Close"] < vwap
-            )
-
-            # =================================
-            # STOPLOSS AND RISK
-            # =================================
-
-            sl_ce = (m_high + m_low) / 2
-            sl_pe = (m_high + m_low) / 2
-
-            risk_ce = row["Close"] - sl_ce
-            risk_pe = sl_pe - row["Close"]
-
-            risk_ok_ce = (
-                risk_ce > 0
-                and risk_ce <= MAX_RISK_ATR * row["ATR"]
-            )
-
-            risk_ok_pe = (
-                risk_pe > 0
-                and risk_pe <= MAX_RISK_ATR * row["ATR"]
-            )
-
-            # =================================
-            # FINAL SIGNAL
-            # =================================
-
-            ce_signal = (
-                common
-                and close_up
-                and not close_down
-                and row["Close"] > row["Open"]
-                and trend_ce
-                and vwap_ce
-                and risk_ok_ce
-            )
-
-            pe_signal = (
-                common
-                and close_down
-                and not close_up
-                and row["Close"] < row["Open"]
-                and trend_pe
-                and vwap_pe
-                and risk_ok_pe
-            )
-
-            if not (ce_signal or pe_signal):
-                continue
-
-            # =================================
-            # SIGNAL DETAILS
-            # =================================
-
-            side = "BUY CE" if ce_signal else "BUY PE"
-
-            entry = float(row["Close"])
-
-            sl = float(
-                sl_ce if ce_signal else sl_pe
-            )
-
-            risk = abs(entry - sl)
-
-            if ce_signal:
-
-                target1 = entry + risk * RR1
-                target2 = entry + risk * RR2
-
-            else:
-
-                target1 = entry - risk * RR1
-                target2 = entry - risk * RR2
-
-            candle_start = ts.strftime(
-                "%d-%m-%Y %I:%M %p"
-            )
-
-            candle_end = (
-                ts + timedelta(minutes=30)
-            ).strftime("%I:%M %p")
-
-            name = symbol.replace("^", "")
-
-            # =================================
-            # TELEGRAM MESSAGE
-            # =================================
-
-            message = f"""
-<b>🚀 ROMYO MOTHER CANDLE SIGNAL</b>
-
-<b>{side}</b>
-
-━━━━━━━━━━━━━━━━━━
-
-📊 Symbol: <b>{name}</b>
-
-⏱ Timeframe: 30 MIN
-
-📅 Candle Date: {ts.strftime('%d-%m-%Y')}
-
-🕒 Candle Time:
-{candle_start} - {candle_end} IST
-
-━━━━━━━━━━━━━━━━━━
-
-🎯 Entry: {entry:.2f}
-
-🛑 Stoploss: {sl:.2f}
-
-✅ Target 1: {target1:.2f}
-
-🎯 Target 2: {target2:.2f}
-
-━━━━━━━━━━━━━━━━━━
-
-⭐ Signal Quality: <b>{q}/10</b>
-
-📈 Inside Candles: {inside_count}
-
-📊 Breakout Body: {body_pct:.1f}%
-
-📦 Mother Range: {mother_range:.2f}
-
-📉 ATR: {row['ATR']:.2f}
-
-━━━━━━━━━━━━━━━━━━
-
-⏳ Time Stop: {TIME_STOP} candles
-
-⚠️ Signal is based on completed 30m candle.
-
-<b>ROMYO SIGNALS</b>
-"""
-
-            if send_telegram(message):
-
-                print(
-                    f"SIGNAL SENT: {symbol} {side} {ts}"
-                )
-
-                state[symbol] = ts.isoformat()
-
-                save_state(state)
-
-                # Mother candle consumed after signal
-                active = False
-
-                return
-
-        # No signal: save latest processed candle
-        if symbol not in state:
-
-            state[symbol] = df.index[-1].isoformat()
-
-            save_state(state)
-
-    except Exception as e:
-
-        print(
-            f"ERROR {symbol}: {str(e)}"
-        )
-
-
-# ==========================================
-# MAIN
-# ==========================================
 
 def main():
+    if not TOKEN or not CHAT_ID:
+        raise SystemExit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID secrets set karo")
 
-    print("=" * 50)
+    universe = build_universe()
+    frames = download_all(universe)
+    print(f"{len(frames)}/{len(universe)} symbols ka data aaya")
+    if not frames:
+        return
 
-    print("ROMYO 30 MIN MOTHER CANDLE SCANNER")
+    state, first_run = load_state()
+    sent = set(state["sent"])
 
-    print("Started:", datetime.now(IST))
+    all_days = sorted({d for f in frames.values() for d in f.index.date})
+    keep_n = FIRST_RUN_SESSIONS if first_run else 1
+    allowed = set(all_days[-keep_n:])
 
-    print("Total Symbols:", len(SYMBOLS))
+    pending = []
+    for name, df in frames.items():
+        try:
+            for s in scan_symbol(df):
+                if s["start"].date() not in allowed:
+                    continue
+                key = f"{name}|{s['start'].isoformat()}|{s['side']}"
+                if key in sent:
+                    continue
+                pending.append((key, name, s))
+        except Exception as e:
+            print("scan error", name, e)
 
-    print("=" * 50)
-
-    state = load_state()
-
-    for i, symbol in enumerate(SYMBOLS, 1):
-
-        print(
-            f"[{i}/{len(SYMBOLS)}] Scanning {symbol}"
-        )
-
-        scan_symbol(symbol, state)
-
-        time.sleep(0.5)
+    pending.sort(key=lambda x: (x[2]["start"], x[1]))
+    print(f"{len(pending)} naye signal")
+    for key, name, s in pending:
+        if send(fmt_msg(name, universe[name][1], s)):
+            state["sent"].append(key)
+        time.sleep(3.2)   # Telegram rate limit
 
     save_state(state)
 
-    print("=" * 50)
-
-    print("SCAN COMPLETED")
-
-    print("Finished:", datetime.now(IST))
-
-    print("=" * 50)
-
 
 if __name__ == "__main__":
-
     main()
