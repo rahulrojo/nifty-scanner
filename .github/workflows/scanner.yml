@@ -1,47 +1,43 @@
-name: ROMYO Mother Candle Scanner
+name: Mother Candle Scanner
 
 on:
-  workflow_dispatch:
-
   schedule:
-    # Every 30 minutes during NSE trading hours
-    - cron: '15,45 3-10 * * 1-5'
+    # 30m candle band hone ke 2 min baad (IST 09:47 se 15:17, phir 15:32)
+    - cron: "17,47 4-9 * * 1-5"
+    - cron: "2 10 * * 1-5"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: mother-candle-scanner
+  cancel-in-progress: false
+
 jobs:
   scan:
-
     runs-on: ubuntu-latest
-
-    timeout-minutes: 25
-
+    timeout-minutes: 20
     steps:
+      - uses: actions/checkout@v4
 
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Install Libraries
-        run: |
-          pip install yfinance pandas numpy requests
+      - name: Install
+        run: pip install yfinance pandas numpy requests
 
-      - name: Run ROMYO Scanner
+      - name: Run scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python main.py
+          FIRST_RUN_SESSIONS: "2"
+        run: python main.py
 
-      - name: Save Signal State
+      - name: Save state
         run: |
-          git config user.name "ROMYO Scanner"
-          git config user.email "romyo-scanner@users.noreply.github.com"
-          git add signal_state.json
-          git diff --cached --quiet || git commit -m "Update ROMYO signal state"
-          git push
+          git config user.name "scanner-bot"
+          git config user.email "scanner-bot@users.noreply.github.com"
+          git add state.json
+          git diff --cached --quiet || (git commit -m "update state" && git pull --rebase && git push)
