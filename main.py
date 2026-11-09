@@ -328,6 +328,18 @@ def main():
     if not frames:
         return
 
+    dbg = os.getenv("DEBUG_SYMBOL", "").strip().upper()
+    if dbg:
+        if dbg in frames:
+            d = frames[dbg]
+            print(f"--- DEBUG {dbg}: last 30 candles (IST, candle start time) ---")
+            print(d.tail(30)[["Open", "High", "Low", "Close", "Volume"]].round(2).to_string())
+            for s in scan_symbol(d):
+                print("SIGNAL", s["side"], s["start"], "| mother", s["m_time"],
+                      round(s["m_high"], 2), round(s["m_low"], 2), "| Q10", s["q10"], "Q4", s["score4"])
+        else:
+            print(f"DEBUG: {dbg} ka data nahi mila")
+
     state, first_run = load_state()
     sent = set(state["sent"])
 
