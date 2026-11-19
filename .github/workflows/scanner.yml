@@ -1,43 +1,49 @@
-name: Mother Candle Scanner
+name: Aurora Scanner
 
 on:
   schedule:
-    # 30m candle band hone ke 2 min baad (IST 09:47 se 15:17, phir 15:32)
-    - cron: "17,47 4-9 * * 1-5"
-    - cron: "2 10 * * 1-5"
+    # 30m candle IST :15 / :45 par close hoti hai (UTC :45 / :15). Close ke 2 min baad run.
+    - cron: '17,47 4-9 * * 1-5'   # 09:47 - 15:17 IST
+    - cron: '2 10 * * 1-5'        # 15:32 IST (last candle 15:15-15:30)
   workflow_dispatch:
+    inputs:
+      send_today:
+        description: 'Aaj ke saare signals bhejo (true/false)'
+        default: 'true'
+
+concurrency:
+  group: aurora-scanner
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
-concurrency:
-  group: mother-candle-scanner
-  cancel-in-progress: false
-
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: Install
+      - name: Install deps
         run: pip install yfinance pandas numpy requests
 
-      - name: Run scanner
+      - name: Run Aurora scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          FIRST_RUN_SESSIONS: "2"
+          SEND_TODAY: ${{ github.event.inputs.send_today || 'false' }}
+          SEND_EXITS: '0'
+          MAX_AGE_MIN: '90'
         run: python main.py
 
-      - name: Save state
+      - name: Save sent signals (duplicate se bachne ke liye)
         run: |
-          git config user.name "scanner-bot"
-          git config user.email "scanner-bot@users.noreply.github.com"
-          git add state.json
-          git diff --cached --quiet || (git commit -m "update state" && git pull --rebase && git push)
+          git config user.name "aurora-bot"
+          git config user.email "aurora-bot@users.noreply.github.com"
+          git add sent_signals.json || true
+          git diff --cached --quiet || (git commit -m "update sent signals" && git pull --rebase && git push)
