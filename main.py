@@ -484,21 +484,35 @@ def analyze(df, use_vol=True):
             elif peak >= RISK_MULT:
                 stop = min(stop, entry)
 
+    ends = bar_end_of(idx)
     for e in events:
         e["bar_start"] = idx[e["i"]]
-        e["bar_end"] = idx[e["i"]] + pd.Timedelta(minutes=TF_MIN)
+        e["bar_end"] = ends[e["i"]]
     return events
 
 
 # ============================ data / telegram ============================
+def bar_end_of(idx):
+    end = idx + pd.Timedelta(minutes=TF_MIN)
+    cap = idx.normalize() + pd.Timedelta(hours=15, minutes=30)
+    return end.where(end <= cap, cap)  # last candle 15:15-15:30
+
+
 def clean(df):
     df = df.rename(columns=str.lower)[["open", "high", "low", "close", "volume"]].dropna(subset=["close"])
     df = df[~df.index.duplicated(keep="last")].sort_index()
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC")
     df.index = df.index.tz_convert(IST)
+    # 15m -> 30m on NSE grid (9:15, 9:45, 10:15 ...), same as TradingView
+    g = df.resample(f"{TF_MIN}min", offset="9h15min", closed="left", label="left")
+    out = g.agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
+    out["n"] = g["close"].count()
+    out = out.dropna(subset=["close"])
+    # adhuri candle (Yahoo ne 2nd 15m bar nahi diya) hata do; 15:15 candle me sirf 1 bar hota hai
+    out = out[(out["n"] >= 2) | (out.index.strftime("%H:%M") == "15:15")].drop(columns="n")
     now = pd.Timestamp.now(tz=IST)
-    return df[df.index + pd.Timedelta(minutes=TF_MIN) <= now]  # sirf closed candles
+    return out[bar_end_of(out.index) <= now]  # sirf closed candles
 
 
 def download(tickers, batch=25):
@@ -506,7 +520,7 @@ def download(tickers, batch=25):
     for s in range(0, len(tickers), batch):
         chunk = tickers[s:s + batch]
         try:
-            raw = yf.download(chunk, period="60d", interval=f"{TF_MIN}m", group_by="ticker",
+            raw = yf.download(chunk, period="60d", interval="15m", group_by="ticker",
                               auto_adjust=False, threads=True, progress=False)
         except Exception as ex:
             print("download error", chunk[:2], ex)
