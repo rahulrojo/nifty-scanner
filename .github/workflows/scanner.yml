@@ -9,7 +9,7 @@ on:
     inputs:
       send_today:
         description: 'Aaj ke saare signals bhejo (true/false)'
-        default: 'true'
+        default: 'false'
 
 concurrency:
   group: aurora-scanner
